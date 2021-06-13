@@ -1,8 +1,13 @@
 # -*- coding: utf-8 -*-
 """ Common validator and utility functions. """
+from datetime import datetime
 from typing import Tuple
 from config import GlobalConfig
 
+
+# Shared constant
+# Define unix epoch 0 in millisecond as datetime
+DefaultZeroDateTime = datetime.fromtimestamp(0)
 
 def verifyHeader(headers) -> Tuple[bool, str]:
     """Verify request headers.

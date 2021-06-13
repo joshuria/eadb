@@ -9,7 +9,11 @@ from database import initializeDb
 from config import GlobalConfig
 
 app = Flask(__name__)
-app.config['MONGO_URI'] = GlobalConfig.DbConnectionString
+#app.config['MONGO_URI'] = GlobalConfig.DbConnectionString
+app.config['MONGODB_SETTINGS'] = {
+    'db': GlobalConfig.DbName,
+    'host': GlobalConfig.DbConnectionString
+}
 app.config['JWT_SECRET_KEY'] = GlobalConfig.JwtSecret
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = GlobalConfig.JwtExpireTime
 app.register_blueprint(V1Api, url_prefix='/api/v1')
