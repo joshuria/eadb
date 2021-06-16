@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """EAStatus model used in User model."""
 import mongoengine as me
-from common import DefaultZeroDateTime
+from ..common import DefaultZeroDateTime
 
 
 class EAStatus(me.EmbeddedDocument):

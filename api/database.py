@@ -5,8 +5,8 @@ from flask.helpers import make_response
 from flask.json import jsonify
 from flask_mongoengine import MongoEngine
 from mongoengine import NotUniqueError
-from config import GlobalConfig
-from model import User, Log, LogOperation
+from .config import GlobalConfig
+from .model import User, Log, LogOperation
 
 
 db = MongoEngine()

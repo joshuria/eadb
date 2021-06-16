@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Global configuration retrieved from environment variable.
-"""
+"""Global configuration retrieved from environment variable. """
 import os
 from datetime import timedelta
 

@@ -2,7 +2,7 @@
 """ Common validator and utility functions. """
 from datetime import datetime
 from typing import Tuple
-from config import GlobalConfig
+from .config import GlobalConfig
 
 
 # Shared constant

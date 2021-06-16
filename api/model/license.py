@@ -2,7 +2,7 @@
 """Log model used in User model."""
 from datetime import datetime
 import mongoengine as me
-from common import DefaultZeroDateTime
+from ..common import DefaultZeroDateTime
 
 
 class License(me.EmbeddedDocument):

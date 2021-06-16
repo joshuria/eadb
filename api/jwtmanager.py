@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """JWT manager maintenance file."""
 from flask_jwt_extended import JWTManager
-from database import constructErrorResponse
-from config import GlobalConfig
+from .database import constructErrorResponse
+from .config import GlobalConfig
 
 jwt = JWTManager()
 
