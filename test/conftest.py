@@ -2,6 +2,7 @@
 import os
 import sys
 import json
+from datetime import datetime
 import urllib.parse
 
 sys.path.insert(
@@ -9,8 +10,10 @@ sys.path.insert(
 )
 
 import pytest
+import pymongo
 from app import create_app
 from api.config import GlobalConfig
+from api.common import DefaultZeroDateTime
 
 @pytest.fixture
 def client():
@@ -20,6 +23,30 @@ def client():
     cxt.push()
     yield client
     cxt.pop()
+
+dbclient = None
+testdb = None
+
+def createUser(userId: str, password: str):
+    global dbclient, testdb
+    if dbclient is None:
+        dbclient = pymongo.MongoClient(host='localhost', port=27017)
+        testdb = dbclient[GlobalConfig.DbName]
+    testdb.user.update_one({'_id': userId}, {
+        "$set": {
+            'password': password, 'status': 1,
+            'createTime': datetime.utcnow(),
+            'lastLoginTime': DefaultZeroDateTime, 'lastLoginIp': '',
+            'availableLicenses': [], 'auth': [],
+            'log': [{
+                'timestamp': datetime.utcnow(), 'operation': 16, 'ip': '', 'user': ''
+            }]
+        }
+    }, upsert=True)
+
+def removeUser(userId: str):
+    global dbclient, testdb
+    testdb.user.delete_one({'_id': userId})
 
 GeneralHeader = {
     'User-Agent': 'testing-api-user-agent',
@@ -47,6 +74,13 @@ def verifyResponse(client, response, expectStatusCode: int, operation: str):
 def runAuth(client, payload=None, customHeader=None):
     return client.post(
         '/api/v1/auth',
+        content_type='application/json',
+        headers=customHeader if customHeader is not None else GeneralHeader,
+        data=json.dumps(payload))
+
+def runGetUser(client, userId: str, payload=None, customHeader=None):
+    return client.get(
+        urllib.parse.urljoin('/api/v1/user/', userId),
         content_type='application/json',
         headers=customHeader if customHeader is not None else GeneralHeader,
         data=json.dumps(payload))

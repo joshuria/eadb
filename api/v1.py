@@ -105,7 +105,9 @@ def queryUser(userId: str):
      :note: this method will NOT verify userId's format.
     """
     success, errorResponse = _generalVerify(userId)
-    query = User.getById(userId, excludeList=('password'))
+    if not success:
+        return errorResponse
+    query = User.getById(userId, excludeList=('password', 'auth'))
     try:
         user = query.get()
     except DoesNotExist:
