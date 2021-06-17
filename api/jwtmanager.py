@@ -19,5 +19,17 @@ def initializeJwt(app) -> None:
     @jwt.invalid_token_loader
     def invalidTokenHandler(msg):
         return constructErrorResponse(
-            401, 10,
+            401, 11,
             ('JWT is invalid: %s' % msg) if GlobalConfig.ServerDebug else '')
+
+    @jwt.unauthorized_loader
+    def missingJWTHandler(msg):
+        return constructErrorResponse(
+            401, 12,
+            ('JWT is missing: %s' % msg) if GlobalConfig.ServerDebug else '')
+
+    @jwt.user_lookup_error_loader
+    def invalidUserErrorhandler(_, payload):
+        return constructErrorResponse(
+            401, 13,
+            ('JWT user is invalid: %s' % payload) if GlobalConfig.ServerDebug else '')

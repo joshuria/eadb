@@ -46,10 +46,10 @@ def _generalVerify(
         # Verify if is admin only
         activeUser = get_jwt_identity()
         if adminOnly and (activeUser != GlobalConfig.DbDefaultAdmin):
-            return constructErrorResponse(
+            return False, constructErrorResponse(
                 403, 3, 'JWT active user is not admin' if GlobalConfig.ServerDebug else '')
         if (not adminOnly) and (activeUser not in (GlobalConfig.DbDefaultAdmin, userId)):
-            return constructErrorResponse(
+            return False, constructErrorResponse(
                 403, 3, 'JWT active user is not current user' if GlobalConfig.ServerDebug else '')
     return True, ''
 
