@@ -16,6 +16,7 @@ def create_app(isTesting: bool=False):
         'db': GlobalConfig.DbName + ('' if not isTesting else '-test'),
         'host': GlobalConfig.DbConnectionString
     }
+    app.testing = isTesting
     app.config['JWT_SECRET_KEY'] = GlobalConfig.JwtSecret
     app.config['JWT_ACCESS_TOKEN_EXPIRES'] = GlobalConfig.JwtExpireTime
     app.register_blueprint(V1Api, url_prefix='/api/v1')

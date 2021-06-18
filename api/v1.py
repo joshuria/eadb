@@ -2,15 +2,12 @@
 """Defines all information querying methods."""
 from typing import Tuple
 from flask import Blueprint, jsonify, make_response, request
-from flask_jwt_extended import create_access_token
-from flask_jwt_extended.utils import get_jwt_identity
-from flask_jwt_extended.view_decorators import jwt_required
+from flask_jwt_extended import create_access_token, get_jwt_identity, jwt_required
 import mongoengine as me
-from mongoengine.errors import DoesNotExist
 from .common import verifyHeader
 from .config import GlobalConfig
 from .database import constructErrorResponse
-from .model import Log, LogOperation, Status, User
+from .model import ErrorCode, Log, LogOperation, Status, User
 
 V1Api = Blueprint('V1Api', __name__)
 
@@ -19,44 +16,59 @@ def _generalVerify(
     userId: str, verifyUserIdFormat: bool=True, verifyJWT: bool=True, adminOnly: bool=False
 ) -> Tuple[bool, str]:
     """Do common verification flow. Include:
-     - Headers (400)
-     - JWT info verify (403)
-     - User id exists or not (404)
+     - Headers: x-access-apikey, x-access-name, x-access-version, User-Agent (400)
+     - JWT identify info verify (403)
+     - User id format (400)
+     :param userId: user's id.
+     :param verifyUserIdFormat: verify user's id must be email.
+     :param verifyJWT: verify JWT identify is specify userId or admin.
+     :param adminOnly: specify if the user must be admin.
      :note: this method is not suitable for `/auth`.
      :return: tuple of:
           - verify success or fail.
           - verify fail response
     """
     # Verify header (400)
-    result, msg = verifyHeader(request.headers)
+    result, msg, code = verifyHeader(request.headers)
     if not result:
-        return False, constructErrorResponse(400, 1, msg)
+        return False, constructErrorResponse(400, code, msg)
     if userId is None:
-        return (
-            False,
-            constructErrorResponse(400, 2, 'Missing userId' if GlobalConfig.ServerDebug else ''))
+        return (False, constructErrorResponse(
+            400, ErrorCode.MissingParameter,
+            'Missing userId' if GlobalConfig.ServerDebug else ''))
     # Verify userId's format (400)
     if verifyUserIdFormat and (not User.verifyUserId(userId)):
-        return (
-            False,
-            constructErrorResponse(
-                400, 3, 'Invalid user id format' if GlobalConfig.ServerDebug else ''))
+        return (False, constructErrorResponse(
+                400, ErrorCode.InvalidParameter,
+                'Invalid user id format' if GlobalConfig.ServerDebug else ''))
     # Check JWT with userId (403)
     if verifyJWT:
         # Verify if is admin only
         activeUser = get_jwt_identity()
         if adminOnly and (activeUser != GlobalConfig.DbDefaultAdmin):
             return False, constructErrorResponse(
-                403, 3, 'JWT active user is not admin' if GlobalConfig.ServerDebug else '')
+                403, ErrorCode.AuthAdminOnly,
+                'JWT active user is not admin' if GlobalConfig.ServerDebug else '')
         if (not adminOnly) and (activeUser not in (GlobalConfig.DbDefaultAdmin, userId)):
             return False, constructErrorResponse(
-                403, 3, 'JWT active user is not current user' if GlobalConfig.ServerDebug else '')
+                403, ErrorCode.AuthUserNotMatch,
+                'JWT active user is not current user' if GlobalConfig.ServerDebug else '')
     return True, ''
 
-@V1Api.route('auth', defaults={'login': 0}, methods=['POST'])
-@V1Api.route('auth/<int:login>', methods=['POST'])
-def auth(login: int = 0):
+#@V1Api.route('/auth', defaults={'login': 0}, methods=['POST'])
+@V1Api.route('/auth', methods=['POST'])
+@V1Api.route('/auth/<int:login>', methods=['POST'])
+def auth(login: int=0):
     """Do JWT auth and (optionally) get user detail info.
+    URL parameter:
+      - login: this auth is also for user login. Basic user info is required.
+    Parameters:
+      - userId: user's ID, can be email or other format.
+      - password: user's hashed password.
+    Response:
+      - 400: if missing header or missing parameter (userId, password).
+      - 403: user is disabled.
+      - 404: user not found or wrong password.
     If login is set to 1, the following info will be returned:
       - createTime
       - status
@@ -64,15 +76,18 @@ def auth(login: int = 0):
       - lastLoginIp
       - eaStatus
       - log
-    POST parameters:
-      - userId: user's ID.
-      - password: user's hashed password.
     """
+    if request.json is None:
+        # When client does not send any payload, request.json will be None
+        return constructErrorResponse(
+            400, ErrorCode.MissingParameter,
+            'Missing userId or password' if GlobalConfig.ServerDebug else '')
     userId = request.json.get('userId', None)
     password = request.json.get('password', None)
     if (userId is None) or (password is None):
         return constructErrorResponse(
-            400, 2, 'Missing userId or password' if GlobalConfig.ServerDebug else '')
+            400, ErrorCode.MissingParameter,
+            'Missing userId or password' if GlobalConfig.ServerDebug else '')
     # Verify header
     success, errorResponse = _generalVerify(userId, False, False)
     if not success:
@@ -82,14 +97,16 @@ def auth(login: int = 0):
         userId, excludeList=[] if login == 1 else ['uid', 'availableLicenses', 'auth', 'log'])
     try:
         user = query.get()
-    except DoesNotExist:
+    except me.errors.DoesNotExist:
         user = None
     if (user is None) or (user.password != password):
         return constructErrorResponse(
-            404, 3, 'Invalid userId or password' if GlobalConfig.ServerDebug else '')
+            404, ErrorCode.InvalidParameter,
+            'Invalid userId or password' if GlobalConfig.ServerDebug else '')
     if user.status == Status.Disabled:
         return constructErrorResponse(
-            403, 3, 'User is disabled' if GlobalConfig.ServerDebug else '')
+            403, ErrorCode.AuthUserDisabled,
+            'User is disabled' if GlobalConfig.ServerDebug else '')
     # Success
     # TODO: optional: write login log if detail = 1
     user.password = None
@@ -103,6 +120,22 @@ def queryUser(userId: str):
     """Query given user's all available products state.
      :param userId: user's id. (url escaped)
      :note: this method will NOT verify userId's format.
+    URL parameter:
+      - userId: user's id to query. This is limited to use email format.
+    Response:
+      - 400: if missing header or missing parameter (userId).
+      - 401: JWT auth fail.
+      - 403: user is disabled, JWT indentity does not match to userId, or user try to get other
+        user's data.
+      - 404: user not found.
+    If login is set to 1, the following info will be returned:
+      - createTime
+      - status
+      - lastLoginTime
+      - lastLoginIp
+      - eaStatus
+      - log
+      - licenses
     """
     success, errorResponse = _generalVerify(userId)
     if not success:
@@ -110,14 +143,16 @@ def queryUser(userId: str):
     query = User.getById(userId, excludeList=('password', 'auth'))
     try:
         user = query.get()
-    except DoesNotExist:
+    except me.errors.DoesNotExist:
         user = None
     if user is None:
         return constructErrorResponse(
-            404, 3, 'Invalid userId or password' if GlobalConfig.ServerDebug else '')
+            404, ErrorCode.AuthUserNotMatch,
+            'Invalid userId or password' if GlobalConfig.ServerDebug else '')
     if user.status == Status.Disabled:
         return constructErrorResponse(
-            403, 3, 'User is disabled' if GlobalConfig.ServerDebug else '')
+            403, ErrorCode.AuthUserDisabled,
+            'User is disabled' if GlobalConfig.ServerDebug else '')
     return make_response(jsonify(user), 200) if success else errorResponse
 
 @V1Api.route('user/<userId>', methods=['POST'])
@@ -165,7 +200,7 @@ def modifyUser(userId: str):
             conditions[c] = value
     try:
         User.getById(userId).update_one(**conditions)
-    except DoesNotExist:
+    except me.errors.DoesNotExist:
         return constructErrorResponse(
             404, 3, 'UserId not exist' if GlobalConfig.ServerDebug else '')
     # TODO: write modify log
@@ -181,7 +216,7 @@ def deleteUser(userId: str):
     # Update data
     try:
         User.getById(userId).delete()
-    except DoesNotExist:
+    except me.errors.DoesNotExist:
         return constructErrorResponse(
             404, 3, 'UserId not exist' if GlobalConfig.ServerDebug else '')
     # TODO: write delete log

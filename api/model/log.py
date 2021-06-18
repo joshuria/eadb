@@ -13,6 +13,7 @@ class Log(me.EmbeddedDocument):
 
 class LogOperation():
     """Defines tracked operations in log."""
+    Login = 0x0
     CreateUser = 0x10
     DeleteUser = 0x11
     ModifyUser = 0x12

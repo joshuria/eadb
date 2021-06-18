@@ -2,7 +2,6 @@
 """Log model used in User model."""
 from datetime import datetime
 import mongoengine as me
-from ..common import DefaultZeroDateTime
 
 
 class License(me.EmbeddedDocument):
@@ -13,5 +12,5 @@ class License(me.EmbeddedDocument):
     owner = me.StringField(required=True)
     buyTime = me.DateTimeField(default=datetime.utcnow())
     consumer = me.StringField(default='')
-    activationTime = me.DateTimeField(default=DefaultZeroDateTime)
+    activationTime = me.DateTimeField(default=datetime.fromtimestamp(0))
     activationIp = me.StringField(default='')

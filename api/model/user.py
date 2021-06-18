@@ -5,7 +5,6 @@ from datetime import datetime
 from typing import Tuple
 import re
 import mongoengine as me
-from ..common import DefaultZeroDateTime
 from ..config import GlobalConfig
 from . import AuthSet, EAStatus, License, Log, Status
 
@@ -39,7 +38,7 @@ class User(me.DynamicDocument):
     password = me.StringField(required=True)
     createTime = me.DateTimeField(default=datetime.utcnow())
     status = me.IntField(default=Status.Enabled, choices=Status.getAllStatus())
-    lastLoginTime = me.DateTimeField(default=DefaultZeroDateTime)
+    lastLoginTime = me.DateTimeField(default=datetime.fromtimestamp(0))
     lastLoginIp = me.StringField(default='')
     availableLicenses = me.EmbeddedDocumentListField(License, db_field='licenses', default=list)
     eaStatus = me.EmbeddedDocumentListField(EAStatus, default=list)
