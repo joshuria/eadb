@@ -65,10 +65,12 @@ def auth(login: int=0):
     Parameters:
       - userId: user's ID, can be email or other format.
       - password: user's hashed password.
-    Response:
+    Response Status Code:
+      - 200: success.
       - 400: if missing header or missing parameter (userId, password).
       - 403: user is disabled.
       - 404: user not found or wrong password.
+    Response Data:
     If login is set to 1, the following info will be returned:
       - createTime
       - status
@@ -118,17 +120,18 @@ def auth(login: int=0):
 @jwt_required()
 def queryUser(userId: str):
     """Query given user's all available products state.
-     :param userId: user's id. (url escaped)
+     :param userId: user's id.
      :note: this method will NOT verify userId's format.
     URL parameter:
       - userId: user's id to query. This is limited to use email format.
-    Response:
+    Response Status Code:
+      - 200: success.
       - 400: if missing header or missing parameter (userId).
       - 401: JWT auth fail.
       - 403: user is disabled, JWT indentity does not match to userId, or user try to get other
         user's data.
       - 404: user not found.
-    If login is set to 1, the following info will be returned:
+    Response Data:
       - createTime
       - status
       - lastLoginTime
@@ -149,20 +152,28 @@ def queryUser(userId: str):
         return constructErrorResponse(
             404, ErrorCode.AuthUserNotMatch,
             'Invalid userId or password' if GlobalConfig.ServerDebug else '')
-    if user.status == Status.Disabled:
-        return constructErrorResponse(
-            403, ErrorCode.AuthUserDisabled,
-            'User is disabled' if GlobalConfig.ServerDebug else '')
+    #if user.status == Status.Disabled:
+    #    return constructErrorResponse(
+    #        403, ErrorCode.AuthUserDisabled,
+    #        'User is disabled' if GlobalConfig.ServerDebug else '')
     return make_response(jsonify(user), 200) if success else errorResponse
 
 @V1Api.route('user/<userId>', methods=['POST'])
 @jwt_required()
 def createUser(userId: str):
-    """Create a new user.
-     :param userId: user's id. (url escaped)
+    """Create a new user (by admin only).
+     :param userId: user's id.
+    URL parameter:
+      - userId: user's id to query. This is limited to use email format.
     POST parameters:
       - password: user's hashed password.
       - status: (optional) user's default status. Default is 1 (enabled).
+    Response Status Code:
+      - 200: success.
+      - 400: invalid parameter format, missing header, or missing parameter.
+      - 401: JWT auth fail.
+      - 403: JWT identify user does not have priviledge.
+      - 409: userId already exist.
     """
     success, errorResponse = _generalVerify(userId, adminOnly=True)
     if not success:
@@ -171,7 +182,8 @@ def createUser(userId: str):
     password = request.json.get('password', None)
     if password is None:
         return constructErrorResponse(
-            400, 2, 'Missing password' if GlobalConfig.ServerDebug else '')
+            400, ErrorCode.MissingParameter,
+            'Missing password' if GlobalConfig.ServerDebug else '')
     # Insert new user
     user = User(
         uid=userId,
@@ -182,14 +194,28 @@ def createUser(userId: str):
         user.save(force_insert=True)
     except me.errors.NotUniqueError:
         return constructErrorResponse(
-            409, 2, 'User alreay exists' if GlobalConfig.ServerDebug else '')
+            409, ErrorCode.UserAlreadyExist,
+            'User alreay exists' if GlobalConfig.ServerDebug else '')
     return make_response(jsonify({}), 200)
 
 @V1Api.route('user/<userId>', methods=['PUT'])
 @jwt_required()
 def modifyUser(userId: str):
-    """Modify user's data."""
-    success, errorResponse = _generalVerify(userId)
+    """Modify user's data.
+     :param userId: user's id.
+    URL parameter:
+      - userId: target user's id to update, must be email format.
+    PUT parameters:
+      - password: (optional) user's new hashed password.
+      - status: (optional) user's new status.
+    Response Status Code:
+      - 200: success.
+      - 400: invalid parameter format, missing header, or missing parameter.
+      - 401: JWT auth fail.
+      - 403: JWT identify user does not have priviledge.
+      - 404: userId does not exist.
+    """
+    success, errorResponse = _generalVerify(userId, verifyUserIdFormat=True)
     if not success:
         return errorResponse
     # Update data
@@ -199,10 +225,16 @@ def modifyUser(userId: str):
         if value is not None:
             conditions[c] = value
     try:
-        User.getById(userId).update_one(**conditions)
-    except me.errors.DoesNotExist:
+        result = User.getById(userId).update_one(**conditions)
+    except me.errors.ValidationError as e:
         return constructErrorResponse(
-            404, 3, 'UserId not exist' if GlobalConfig.ServerDebug else '')
+            400, ErrorCode.InvalidParameter,
+            'Parameter validation fail: %s' % e.message if GlobalConfig.ServerDebug else '')
+    if result == 0:
+        # update_one doesn't raise DoesNotExist, so use result count
+        return constructErrorResponse(
+            404, ErrorCode.UserNotExist,
+            'UserId not exist' if GlobalConfig.ServerDebug else '')
     # TODO: write modify log
     return make_response(jsonify({}), 200)
 

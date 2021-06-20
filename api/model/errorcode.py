@@ -15,6 +15,10 @@ class ErrorCode:
     MissingParameter = 0x200
     # Invalid parameter format
     InvalidParameter = 0x201
+    # User not exist
+    UserNotExist = 0x202
+    # User already exist (when creating)
+    UserAlreadyExist = 0x203
 
     # Auth
     # Admin only
