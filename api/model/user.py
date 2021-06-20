@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """User model."""
 from __future__ import annotations
-from datetime import datetime
 from typing import Tuple
 import re
 import mongoengine as me
 from ..config import GlobalConfig
+from ..timefunction import ZeroDateTime, now
 from . import AuthSet, EAStatus, License, Log, Status
 
 
@@ -36,9 +36,9 @@ class User(me.DynamicDocument):
     }
     uid = me.StringField(db_field='_id', min_length=4, max_length=32, primary_key=True)
     password = me.StringField(required=True)
-    createTime = me.DateTimeField(default=datetime.utcnow())
+    createTime = me.DateTimeField(default=now)
     status = me.IntField(default=Status.Enabled, choices=Status.getAllStatus())
-    lastLoginTime = me.DateTimeField(default=datetime.fromtimestamp(0))
+    lastLoginTime = me.DateTimeField(default=ZeroDateTime)
     lastLoginIp = me.StringField(default='')
     availableLicenses = me.EmbeddedDocumentListField(License, db_field='licenses', default=list)
     eaStatus = me.EmbeddedDocumentListField(EAStatus, default=list)

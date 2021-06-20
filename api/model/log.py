@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """Log model used in User model."""
-from datetime import datetime
 import mongoengine as me
+from ..timefunction import now
 
 
 class Log(me.EmbeddedDocument):
     """Defines Log document used by User."""
-    timestamp = me.DateTimeField(default=datetime.utcnow())
+    timestamp = me.DateTimeField(default=now)
     operation = me.IntField(required=True)
     ip = me.StringField(required=True)
     user = me.StringField(default='')

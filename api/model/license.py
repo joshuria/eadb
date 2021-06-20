@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Log model used in User model."""
-from datetime import datetime
 import mongoengine as me
+from ..timefunction import ZeroDateTime, now
 
 
 class License(me.EmbeddedDocument):
@@ -10,7 +10,7 @@ class License(me.EmbeddedDocument):
     eaType = me.IntField(required=True)
     durationDay = me.IntField(db_field='duration', default=30)
     owner = me.StringField(required=True)
-    buyTime = me.DateTimeField(default=datetime.utcnow())
+    buyTime = me.DateTimeField(default=now)
     consumer = me.StringField(default='')
-    activationTime = me.DateTimeField(default=datetime.fromtimestamp(0))
+    activationTime = me.DateTimeField(default=ZeroDateTime)
     activationIp = me.StringField(default='')

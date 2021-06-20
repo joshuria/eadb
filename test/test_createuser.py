@@ -80,7 +80,7 @@ def test_create_user_exist(
     })
     verifyResponse(client, result, 200, 'auth')
     result = runCreateUser(
-        client, 'test-user@testing.com', jwt=result.headers['JWT'],
+        client, 'test1@testing.com', jwt=result.headers['JWT'],
         payload={
             'userId': 'test1@testing.com',
             'password': DefaultPassword

@@ -8,6 +8,7 @@ from .common import verifyHeader
 from .config import GlobalConfig
 from .database import constructErrorResponse
 from .model import ErrorCode, Log, LogOperation, Status, User
+from .timefunction import epochMSToDateTime, now
 
 V1Api = Blueprint('V1Api', __name__)
 
@@ -269,8 +270,51 @@ def deleteUser(userId: str):
 @V1Api.route('user-log/<userId>', methods=['GET'])
 @jwt_required()
 def getUserLog(userId: str):
-    """Get user's operation logs."""
-    raise NotImplementedError
+    """Get user's operation log.
+     :param userId: user's id.
+    URL parameter:
+      - userId: target user's id to update, must be email format.
+    GET parameter:
+      - size: max size of items to return. Default is 32.
+      - startTime: starting time in unix epoch (ms), included.
+      - endTime, end time in unix epoch (ms), excluded. Default is now.
+    Response Status Code:
+      - 200: success.
+      - 400: invalid parameter format, missing header, or missing parameter.
+      - 401: JWT auth fail.
+      - 403: JWT identify user does not have priviledge.
+      - 404: userId does not exist.
+    """
+    success, errorResponse = _generalVerify(userId)
+    if not success:
+        return errorResponse
+    # Parameters
+    size = request.values.get('size', 32, type=int)
+    startTime = request.values.get('startTime', None, type=float)
+    endTime = request.values.get('endTime', None, type=float)
+    if startTime is None:
+        return constructErrorResponse(
+            400, ErrorCode.InvalidParameter,
+            'Missing startTime' if GlobalConfig.ServerDebug else '')
+    startTime = epochMSToDateTime(startTime)
+    endTime = now() \
+        if (endTime is None) or (endTime == 0) \
+        else epochMSToDateTime(endTime)
+    # endTime < startTime: return nothing
+    if endTime < startTime:
+        return make_response(jsonify({'remain': 0, 'result': []}), 200)
+    # Do query
+    result = User.objects.aggregate([
+        {'$match': { '_id': userId }},
+        {'$unwind': '$log'},
+        {'$match': { 'log.timestamp': {'$gte': startTime, '$lt': endTime}}},
+        {'$project': {'_id': 1, 'log': 1}},
+        {'$sort': {'log.timestamp': -1}},
+        {'$limit': size},
+    ])
+    print(startTime, endTime.timestamp())
+    result = [l['log'] for l in result]
+    return make_response(jsonify({'remain': len(result), 'result': result}), 200)
 
 @V1Api.route('license/<userId>', methods=['POST'])
 @jwt_required()

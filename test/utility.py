@@ -2,13 +2,15 @@
 """Defines utilities for testing."""
 import os
 import sys
+import random
+import string
 
 sys.path.insert(
     0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 )
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 import urllib.parse
 import pymongo
 import flask
@@ -41,14 +43,43 @@ def createUser(userId: str, password: str=DefaultPassword, status:int=Status.Ena
     testdb.user.update_one({'_id': userId}, {
         "$set": {
             'password': password, 'status': status,
-            'createTime': datetime.utcnow(),
-            'lastLoginTime': datetime.fromtimestamp(0), 'lastLoginIp': '',
+            'createTime': datetime.now(timezone.utc),
+            'lastLoginTime': datetime.fromtimestamp(0, timezone.utc),
+            'lastLoginIp': '',
             'availableLicenses': [], 'auth': [],
             'log': [{
-                'timestamp': datetime.utcnow(), 'operation': 16, 'ip': '', 'user': ''
+                'timestamp': datetime.now(timezone.utc),
+                'operation': 16, 'ip': '', 'user': ''
             }]
         }
     }, upsert=True)
+
+def addLog(userId: str, n: int) -> None:
+    """Directly add log to user.
+    Do nothing if user already existed.
+     :param userId: user's id.
+     :param password: password. Use global variable DefaultPassword by default.
+     :param status: user default status. Default is enabled.
+    """
+    global dbclient, testdb
+    if dbclient is None:
+        dbclient = pymongo.MongoClient(host='localhost', port=27017)
+        testdb = dbclient[GlobalConfig.DbName]
+    payload = []
+    now = datetime.now().timestamp() * 1000
+    past = now - 60 * 60 * 24 * 30 * 1000
+    for i in range(n):
+        payload.append({
+            'timestamp': datetime.fromtimestamp((past + (now - past) / n * i) * .001, timezone.utc),
+            'operation': 16,
+            'ip': ''.join(random.choice(string.ascii_lowercase) for x in range(16)),
+            'user': 'testing %d' % i
+        })
+    testdb.user.update_one({'_id': userId}, {
+        "$push": {
+            'log': { '$each': payload }
+        }
+    }, upsert=False)
 
 def removeUser(userId: str):
     """Directly remove user by operating database.
@@ -191,3 +222,25 @@ def runDeleteUser(
             urllib.parse.urljoin('/api/v1/user/', userId), extraUrl),
         content_type='application/json', headers=headers,
         data=json.dumps(payload))
+
+def runGetUserLog(
+    client: flask.testing.FlaskClient, userId: str, jwt: str, extraUrl='',
+    payload=None, headers=GeneralHeader
+) -> flask.Response:
+    """Request GET /user-log/<userId>
+     :param client: flask testing client instance.
+     :param userId: new user's id.
+     :param jwt: auth JWT response.
+     :param extraUrl: extra url parameter to be appended.
+     :param payload: post payload.
+     :param headers: customized header to use.
+    """
+    if (jwt != '') and (jwt is not None):
+        if headers is GeneralHeader:
+            headers = GeneralHeader.copy()
+        headers['Authorization'] = 'Bearer %s' % jwt
+    return client.get(
+        urllib.parse.urljoin(
+            urllib.parse.urljoin('/api/v1/user-log/', userId), extraUrl),
+        content_type='application/json', headers=headers,
+        query_string=payload)
