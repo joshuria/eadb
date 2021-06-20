@@ -169,3 +169,25 @@ def runModifyUser(
             urllib.parse.urljoin('/api/v1/user/', userId), extraUrl),
         content_type='application/json', headers=headers,
         data=json.dumps(payload))
+
+def runDeleteUser(
+    client: flask.testing.FlaskClient, userId: str, jwt: str, extraUrl='',
+    payload=None, headers=GeneralHeader
+) -> flask.Response:
+    """Request DELETE /user/<userId>
+     :param client: flask testing client instance.
+     :param userId: new user's id.
+     :param jwt: auth JWT response.
+     :param extraUrl: extra url parameter to be appended.
+     :param payload: post payload.
+     :param headers: customized header to use.
+    """
+    if (jwt != '') and (jwt is not None):
+        if headers is GeneralHeader:
+            headers = GeneralHeader.copy()
+        headers['Authorization'] = 'Bearer %s' % jwt
+    return client.delete(
+        urllib.parse.urljoin(
+            urllib.parse.urljoin('/api/v1/user/', userId), extraUrl),
+        content_type='application/json', headers=headers,
+        data=json.dumps(payload))

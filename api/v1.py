@@ -161,7 +161,7 @@ def queryUser(userId: str):
 @V1Api.route('user/<userId>', methods=['POST'])
 @jwt_required()
 def createUser(userId: str):
-    """Create a new user (by admin only).
+    """Create a new user (call by admin only).
      :param userId: user's id.
     URL parameter:
       - userId: user's id to query. This is limited to use email format.
@@ -215,13 +215,14 @@ def modifyUser(userId: str):
       - 403: JWT identify user does not have priviledge.
       - 404: userId does not exist.
     """
-    success, errorResponse = _generalVerify(userId, verifyUserIdFormat=True)
+    success, errorResponse = _generalVerify(userId)
     if not success:
         return errorResponse
     # Update data
     conditions = {}
     for c in ('password', 'status'):
         value = request.json.get(c, None)
+        # TODO: verify password must not empty
         if value is not None:
             conditions[c] = value
     try:
@@ -241,16 +242,27 @@ def modifyUser(userId: str):
 @V1Api.route('user/<userId>', methods=['DELETE'])
 @jwt_required()
 def deleteUser(userId: str):
-    """Remove a user."""
+    """Modify user's data (call by admin only).
+     :param userId: user's id.
+    URL parameter:
+      - userId: target user's id to update, must be email format.
+    Response Status Code:
+      - 200: success.
+      - 400: invalid parameter format, missing header, or missing parameter.
+      - 401: JWT auth fail.
+      - 403: JWT identify user does not have priviledge.
+      - 404: userId does not exist.
+    """
     success, errorResponse = _generalVerify(userId, adminOnly=True)
     if not success:
         return errorResponse
     # Update data
-    try:
-        User.getById(userId).delete()
-    except me.errors.DoesNotExist:
+    result = User.getById(userId).delete()
+    if result == 0:
+        # delete doesn't raise DoesNotExist, so use result count
         return constructErrorResponse(
-            404, 3, 'UserId not exist' if GlobalConfig.ServerDebug else '')
+            404, ErrorCode.UserNotExist,
+            'UserId not exist' if GlobalConfig.ServerDebug else '')
     # TODO: write delete log
     return make_response(jsonify({}), 200)
 
