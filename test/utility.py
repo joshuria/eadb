@@ -16,7 +16,8 @@ import pymongo
 import flask
 import flask.testing
 from api.config import GlobalConfig
-from api.model import Status
+from api.model import Status, License, LogOperation
+from api.timefunction import dateTimeToEpochMS, now, ZeroDateTime
 
 
 GeneralHeader = {
@@ -58,8 +59,7 @@ def addLog(userId: str, n: int) -> None:
     """Directly add log to user.
     Do nothing if user already existed.
      :param userId: user's id.
-     :param password: password. Use global variable DefaultPassword by default.
-     :param status: user default status. Default is enabled.
+     :param n: # of logs to add.
     """
     global dbclient, testdb
     if dbclient is None:
@@ -80,6 +80,43 @@ def addLog(userId: str, n: int) -> None:
             'log': { '$each': payload }
         }
     }, upsert=False)
+
+def addLicense(userId: str, n: int, eaType: int, durationDay: int) -> None:
+    """Directly add log to user.
+    Do nothing if user already existed.
+     :param userId: user's id.
+     :param n: # of licenses to add.
+     :param eaType: type of added licenses.
+     :param durationDay: duration in day of licenses.
+    """
+    global dbclient, testdb
+    if dbclient is None:
+        dbclient = pymongo.MongoClient(host='localhost', port=27017)
+        testdb = dbclient[GlobalConfig.DbName]
+    lics = []
+    logs = []
+    now = datetime.now().timestamp() * 1000
+    past = now - 60 * 60 * 24 * 30 * 1000
+    for i in range(n):
+        ts = datetime.fromtimestamp((past + (now - past) / n * i) * .001, timezone.utc)
+        lics.append({
+            '_id': License.generateId(),
+            'buyTime': ts, 'eaType': eaType, 'duration': durationDay, 'owner': userId,
+            'consumer': '', 'activationTime': dateTimeToEpochMS(ZeroDateTime), 'activationIp': ''
+        })
+        logs.append({
+            'timestamp': ts,
+            'operation': LogOperation.LicenseBuy,
+            'ip': ''.join(random.choice(string.ascii_lowercase) for x in range(16)),
+            'user': 'testing %d' % i
+        })
+    testdb.user.update_one({'_id': userId}, {
+        "$push": {
+            'log': { '$each': logs },
+            'licenses': { '$each': lics }
+        }
+    }, upsert=False)
+    #print(testdb.user.find_one({'_id': userId})['licenses'])
 
 def removeUser(userId: str):
     """Directly remove user by operating database.
@@ -265,3 +302,25 @@ def runBuyLicense(
         urllib.parse.urljoin(
             urllib.parse.urljoin('/api/v1/license/', userId), extraUrl),
         content_type='application/json', headers=headers, data=json.dumps(payload))
+
+def runGetLicense(
+    client: flask.testing.FlaskClient, userId: str, jwt: str, extraUrl='',
+    payload=None, headers=GeneralHeader
+) -> flask.Response:
+    """Request GET /license/<userId>
+     :param client: flask testing client instance.
+     :param userId: new user's id.
+     :param jwt: auth JWT response.
+     :param extraUrl: extra url parameter to be appended.
+     :param payload: post payload.
+     :param headers: customized header to use.
+    """
+    if (jwt != '') and (jwt is not None):
+        if headers is GeneralHeader:
+            headers = GeneralHeader.copy()
+        headers['Authorization'] = 'Bearer %s' % jwt
+    return client.get(
+        urllib.parse.urljoin(
+            urllib.parse.urljoin('/api/v1/license/', userId), extraUrl),
+        content_type='application/json', headers=headers,
+        query_string=payload)
