@@ -10,6 +10,7 @@ class Log(me.EmbeddedDocument):
     operation = me.IntField(required=True)
     ip = me.StringField(required=True)
     user = me.StringField(default='')
+    message = me.StringField(default='')
 
 class LogOperation():
     """Defines tracked operations in log."""

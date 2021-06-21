@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
 """Defines all information querying methods."""
+import json
+from json.decoder import JSONDecodeError
 from typing import Tuple
 from flask import Blueprint, jsonify, make_response, request
 from flask_jwt_extended import create_access_token, get_jwt_identity, jwt_required
 import mongoengine as me
+from mongoengine.errors import DoesNotExist
 from .common import verifyHeader
 from .config import GlobalConfig
 from .database import constructErrorResponse
-from .model import ErrorCode, Log, LogOperation, Status, User
+from .model import ErrorCode, License, Log, LogOperation, Status, User
 from .timefunction import epochMSToDateTime, now
 
 V1Api = Blueprint('V1Api', __name__)
@@ -284,6 +287,14 @@ def getUserLog(userId: str):
       - 401: JWT auth fail.
       - 403: JWT identify user does not have priviledge.
       - 404: userId does not exist.
+    Response Data:
+      - remain: remaining logs count.
+      - result: array of log.
+          * result.timestamp: unix epoch timestamp (ms).
+          * operation: operation type of this log.
+          * ip: IP.
+          * user: extra joined user.
+          * message: extra message.
     """
     success, errorResponse = _generalVerify(userId)
     if not success:
@@ -300,6 +311,8 @@ def getUserLog(userId: str):
     endTime = now() \
         if (endTime is None) or (endTime == 0) \
         else epochMSToDateTime(endTime)
+    # Check user exist
+    # TODO
     # endTime < startTime: return nothing
     if endTime < startTime:
         return make_response(jsonify({'remain': 0, 'result': []}), 200)
@@ -312,15 +325,98 @@ def getUserLog(userId: str):
         {'$sort': {'log.timestamp': -1}},
         {'$limit': size},
     ])
-    print(startTime, endTime.timestamp())
     result = [l['log'] for l in result]
     return make_response(jsonify({'remain': len(result), 'result': result}), 200)
 
 @V1Api.route('license/<userId>', methods=['POST'])
 @jwt_required()
 def buyLicense(userId: str):
-    """Buy license for specified user."""
-    raise NotImplementedError
+    """Buy license for specified user (call by admin only).
+     :param userId: user's id.
+    URL parameter:
+      - userId: user's id to query. This is limited to use email format.
+    POST parameters:
+      - param: array of data.
+      - param.eaType: type of EA to buy.
+      - param.count: # of licenses of specified EAType to buy.
+      - param.duration: duration day of license. Default is 30 days.
+    Response Status Code:
+      - 200: success.
+      - 400: invalid parameter format, missing header, or missing parameter.
+      - 401: JWT auth fail.
+      - 403: JWT identify user does not have priviledge.
+      - 409: userId already exist.
+    Response Data:
+      - count: # of success added licenses.
+      - result: array.
+          * result.id: license ID.
+          * result.eaType: EAType of this license.
+          * result.duration: duration of this license.
+    """
+    success, errorResponse = _generalVerify(userId, adminOnly=True)
+    if not success:
+        return errorResponse
+    # Verify other fields
+    param = request.json.get('param', None)
+    if param is None:
+        return constructErrorResponse(
+            400, ErrorCode.MissingParameter,
+            'Missing parameter' if GlobalConfig.ServerDebug else '')
+    #try:
+    #    param = json.loads(param)
+    #except JSONDecodeError:
+    #    return constructErrorResponse(
+    #        400, ErrorCode.InvalidParameter,
+    #        'Invalid parameter' if GlobalConfig.ServerDebug else '')
+
+    userQuery = User.getById(userId)
+    ## Check user exist <- delegate to userId
+    #try:
+    #    u = userQuery.only('_id').get()
+    #    print(u)
+    #except DoesNotExist:
+    #    return constructErrorResponse(
+    #        404, ErrorCode.UserNotExist,
+    #        'UserId not exist' if GlobalConfig.ServerDebug else '')
+    result = []
+    buyTime = now()
+    for record in param:
+        # Skip invalid record
+        if ('count' not in record) or ('eaType' not in record):
+            continue
+        try:
+            count = int(record['count'])
+        except ValueError:
+            # type of count cannot be convert to int
+            continue
+        eaType = record['eaType']
+        # TODO: check eaType
+        duration = record['duration'] if 'duration' in record \
+            else GlobalConfig.AppDefaultLicenseDurationDay
+        if (count <= 0) or (duration <= 0):
+            continue
+        licenses = [
+            License(
+                lid=License.generateId(),
+                eaType=eaType,
+                durationDay=duration,
+                owner=userId,
+                buyTime=buyTime)
+            for i in range(count)]
+        # Insert into user's availableLicense (licenses)
+        updateCount = userQuery.update_one(
+            push_all__availableLicenses=licenses,
+            push__log=Log(
+                timestamp=buyTime,
+                operation=LogOperation.LicenseBuy,
+                ip='',
+                message=json.dumps([{
+                    'id': l.lid, 'eaType': l.eaType, 'duration': l.durationDay
+                } for l in licenses])))
+        print(updateCount)
+        for lic in licenses:
+            result.append({'id': lic.lid, 'eaType': eaType, 'duration': duration})
+    return make_response(jsonify({'count': len(result), 'result': result}), 200)
 
 @V1Api.route('license/<userId>', methods=['GET'])
 @jwt_required()

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Log model used in User model."""
+import uuid
 import mongoengine as me
 from ..timefunction import ZeroDateTime, now
 
@@ -14,3 +15,8 @@ class License(me.EmbeddedDocument):
     consumer = me.StringField(default='')
     activationTime = me.DateTimeField(default=ZeroDateTime)
     activationIp = me.StringField(default='')
+
+    @staticmethod
+    def generateId() -> str:
+        """Generate global unique license ID."""
+        return str(uuid.uuid4())

@@ -49,7 +49,7 @@ def createUser(userId: str, password: str=DefaultPassword, status:int=Status.Ena
             'availableLicenses': [], 'auth': [],
             'log': [{
                 'timestamp': datetime.now(timezone.utc),
-                'operation': 16, 'ip': '', 'user': ''
+                'operation': 16, 'ip': '', 'user': '', 'message': ''
             }]
         }
     }, upsert=True)
@@ -244,3 +244,24 @@ def runGetUserLog(
             urllib.parse.urljoin('/api/v1/user-log/', userId), extraUrl),
         content_type='application/json', headers=headers,
         query_string=payload)
+
+def runBuyLicense(
+    client: flask.testing.FlaskClient, userId: str, jwt: str, extraUrl='',
+    payload=None, headers=GeneralHeader
+) -> flask.Response:
+    """Request POST /license/<userId>
+     :param client: flask testing client instance.
+     :param userId: new user's id.
+     :param jwt: auth JWT response.
+     :param extraUrl: extra url parameter to be appended.
+     :param payload: post payload.
+     :param headers: customized header to use.
+    """
+    if (jwt != '') and (jwt is not None):
+        if headers is GeneralHeader:
+            headers = GeneralHeader.copy()
+        headers['Authorization'] = 'Bearer %s' % jwt
+    return client.post(
+        urllib.parse.urljoin(
+            urllib.parse.urljoin('/api/v1/license/', userId), extraUrl),
+        content_type='application/json', headers=headers, data=json.dumps(payload))

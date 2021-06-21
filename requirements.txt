@@ -9,3 +9,4 @@ Werkzeug==2.0.1
 flask-pymongo=2.3.0
 flask-mongoengine=1.0.0
 flask-jwt-extended=4.2.1
+flask-mail=0.9.1

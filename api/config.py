@@ -45,6 +45,9 @@ class GlobalConfig:
         * JWT_EXPIRE_SECONDS: JWT expire time in seconds.
             Default is "3600"
             Access variable: JwtExpireTime
+        * APP_DEFAULT_DURATION_DAY: default license duration in day.
+            Default is 30 days.
+            Access variable: AppDefaultLicenseDurationDay
     """
     # Server
     ServerDebug = os.getenv('FLASK_DEBUG', '0').lower() in ('true', 't', '1', 'y', 'yes')
@@ -64,3 +67,4 @@ class GlobalConfig:
     }
     JwtSecret = os.getenv('JWT_SECRET', '')
     JwtExpireTime = timedelta(seconds=int(os.getenv('JWT_EXPIRE_SECONDS', '3600')))
+    AppDefaultLicenseDurationDay = os.getenv('APP_DEFAULT_DURATION_DAY', 30)
