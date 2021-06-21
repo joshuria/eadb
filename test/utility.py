@@ -81,7 +81,7 @@ def addLog(userId: str, n: int) -> None:
         }
     }, upsert=False)
 
-def addLicense(userId: str, n: int, eaType: int, durationDay: int) -> None:
+def addLicense(userId: str, n: int, eaType: int, durationDay: int):
     """Directly add log to user.
     Do nothing if user already existed.
      :param userId: user's id.
@@ -100,7 +100,7 @@ def addLicense(userId: str, n: int, eaType: int, durationDay: int) -> None:
     for i in range(n):
         ts = datetime.fromtimestamp((past + (now - past) / n * i) * .001, timezone.utc)
         lics.append({
-            '_id': License.generateId(),
+            'lid': License.generateId(),
             'buyTime': ts, 'eaType': eaType, 'duration': durationDay, 'owner': userId,
             'consumer': '', 'activationTime': dateTimeToEpochMS(ZeroDateTime), 'activationIp': ''
         })
@@ -116,7 +116,7 @@ def addLicense(userId: str, n: int, eaType: int, durationDay: int) -> None:
             'licenses': { '$each': lics }
         }
     }, upsert=False)
-    #print(testdb.user.find_one({'_id': userId})['licenses'])
+    return lics
 
 def removeUser(userId: str):
     """Directly remove user by operating database.
@@ -324,3 +324,23 @@ def runGetLicense(
             urllib.parse.urljoin('/api/v1/license/', userId), extraUrl),
         content_type='application/json', headers=headers,
         query_string=payload)
+
+def runQueryLicense(
+    client: flask.testing.FlaskClient, jwt: str, extraUrl='',
+    payload=None, headers=GeneralHeader
+) -> flask.Response:
+    """Request POST /query-license
+     :param client: flask testing client instance.
+     :param userId: new user's id.
+     :param jwt: auth JWT response.
+     :param extraUrl: extra url parameter to be appended.
+     :param payload: post payload.
+     :param headers: customized header to use.
+    """
+    if (jwt != '') and (jwt is not None):
+        if headers is GeneralHeader:
+            headers = GeneralHeader.copy()
+        headers['Authorization'] = 'Bearer %s' % jwt
+    return client.post(
+            urllib.parse.urljoin('/api/v1/query-license', extraUrl),
+        content_type='application/json', headers=headers, data=json.dumps(payload))

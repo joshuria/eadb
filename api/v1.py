@@ -470,7 +470,7 @@ def getUserLicense(userId: str):
         {'$match': { '_id': userId }},
         {'$unwind': '$licenses'},
         {'$match': { 'licenses.buyTime': {'$gte': startTime, '$lt': endTime}}},
-        {'$project': {'_id': 1, 'licenses': 1}},
+        {'$project': {'_id': 0, 'licenses': 1}},
         {'$sort': {'licenses.buyTime': -1}},
         {'$limit': size},
     ])
@@ -480,8 +480,48 @@ def getUserLicense(userId: str):
 @V1Api.route('query-license', methods=['POST'])
 @jwt_required()
 def queryLicenseStatus():
-    """Query a list of licenses status."""
-    raise NotImplementedError
+    """Query given list of licenses status.
+     :note: this method can be called by admin only.
+    POST parameter:
+      - param: array of license ids to query. Only first 32 items will be processed. The value '32'
+            is defined in GlobalConfig.AppMaxQueryLicenseSize.
+    Response Status Code:
+      - 200: success.
+      - 400: if missing header or missing parameter.
+      - 401: JWT auth fail.
+      - 403: user is disabled, JWT indentity does not match to userId, or user try to get other
+        user's data.
+    Response Data:
+      - result: array of only founded licenses.
+          * result.id: license id.
+          * result.duration: duration in day.
+          * result.eaType: EA type of this license.
+          * result.owner: owner id.
+          * result.buyTime: buy time in unix epoch (ms).
+          * result.activationTime: license activation time in unix epoch time (ms).
+                0 means not activated.
+          * result.activationIp: activation user's IP.
+          * result.consumer: activation user's id.
+    """
+    success, errorResponse = _generalVerify(
+        GlobalConfig.DbDefaultAdmin, verifyUserIdFormat=False, adminOnly=True)
+    if not success:
+        return errorResponse
+    requestIds = request.json.get('param', None)
+    if requestIds is None:
+        return constructErrorResponse(
+            400, ErrorCode.InvalidParameter,
+            'Missing license id list' if GlobalConfig.ServerDebug else '')
+    # Aggregate license ids
+    requestIds = requestIds[:GlobalConfig.AppMaxQueryLicenseSize]
+    # Do query
+    result = User.objects.aggregate([
+        {'$project': {'_id': 0, 'licenses': 1}},
+        {'$unwind': '$licenses'},
+        {'$match': { 'licenses.lid': {'$in': requestIds}}},
+    ])
+    result = [l['licenses'] for l in result]
+    return make_response(jsonify({'result': result}), 200) if success else errorResponse
 
 @V1Api.route('activate/<userId>', methods=['POST'])
 @jwt_required()

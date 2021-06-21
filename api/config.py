@@ -48,6 +48,9 @@ class GlobalConfig:
         * APP_DEFAULT_DURATION_DAY: default license duration in day.
             Default is 30 days.
             Access variable: AppDefaultLicenseDurationDay
+        * APP_MAX_QUERY_LICENSE_SIZE: max # of license ids to query at a time.
+            Default is 32.
+            Access variable: AppMaxQueryLicenseSize
     """
     # Server
     ServerDebug = os.getenv('FLASK_DEBUG', '0').lower() in ('true', 't', '1', 'y', 'yes')
@@ -68,3 +71,4 @@ class GlobalConfig:
     JwtSecret = os.getenv('JWT_SECRET', '')
     JwtExpireTime = timedelta(seconds=int(os.getenv('JWT_EXPIRE_SECONDS', '3600')))
     AppDefaultLicenseDurationDay = os.getenv('APP_DEFAULT_DURATION_DAY', 30)
+    AppMaxQueryLicenseSize = os.getenv('APP_MAX_QUERY_LICENSE_SIZE', 32)

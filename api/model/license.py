@@ -7,7 +7,7 @@ from ..timefunction import ZeroDateTime, now
 
 class License(me.EmbeddedDocument):
     """Defines model of license collection used by User collection."""
-    lid = me.StringField(db_field='_id', primary_key=True)
+    lid = me.StringField(primary_key=True)
     eaType = me.IntField(required=True)
     durationDay = me.IntField(db_field='duration', default=30)
     owner = me.StringField(required=True)

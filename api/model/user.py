@@ -16,6 +16,10 @@ class User(me.DynamicDocument):
         'index_background': GlobalConfig.DbCreateIndexInBackground,
         'indexes': [
             {
+                'name': 'userLicenseId',
+                'fields': ['availableLicenses.lid'],
+            },
+            {
                 'name': 'userLicenseOwnerBuyTimeIndex',
                 'fields': ['availableLicenses.owner',  '-availableLicenses.buyTime'],
             },
