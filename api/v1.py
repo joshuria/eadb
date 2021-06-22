@@ -8,11 +8,11 @@ from flask_jwt_extended import create_access_token, get_jwt_identity, jwt_requir
 import mongoengine as me
 from mongoengine.errors import DoesNotExist
 from pymongo.collection import ReturnDocument
-from .common import verifyHeader
+from .common import verifyHeader, sendMail
 from .config import GlobalConfig
 from .database import constructErrorResponse
 from .model import ErrorCode, License, Log, LogOperation, Status, User
-from .timefunction import ZeroDateTime, epochMSToDateTime, now, toUTCDateTime
+from .timefunction import ZeroDateTime, epochMSToDateTime, now
 
 V1Api = Blueprint('V1Api', __name__)
 
@@ -417,6 +417,7 @@ def buyLicense(userId: str):
         print(updateCount)
         for lic in licenses:
             result.append({'id': lic.lid, 'eaType': eaType, 'duration': duration})
+    sendMail(userId, 'testing titile', 'this is body: ' + userId)
     return make_response(jsonify({'count': len(result), 'result': result}), 200)
 
 @V1Api.route('license/<userId>', methods=['GET'])

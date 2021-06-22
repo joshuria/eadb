@@ -3,6 +3,8 @@
 from typing import Tuple
 from .model import ErrorCode
 from .config import GlobalConfig
+from .manager import mail
+from flask_mail import Message
 
 
 def verifyHeader(headers) -> Tuple[bool, str, int]:
@@ -35,3 +37,9 @@ def verifyHeader(headers) -> Tuple[bool, str, int]:
             if GlobalConfig.ServerDebug \
             else  (False, "", ErrorCode.InvalidUserAgent)
     return True, "", ErrorCode.NoError
+
+def sendMail(address: str, title: str, body: str) -> None:
+    """Send mail to user. """
+    msg = Message(title, sender=GlobalConfig.MailSenderAddress, recipients=[address])
+    msg.body = body
+    mail.send(msg)

@@ -51,6 +51,22 @@ class GlobalConfig:
         * APP_MAX_QUERY_LICENSE_SIZE: max # of license ids to query at a time.
             Default is 32.
             Access variable: AppMaxQueryLicenseSize
+    + Mail settings:
+        * MAIL_SERVER: mail server domain name or IP.
+            Default is 'localhost'.
+            Access variable: MainServer
+        * MAIL_SERVER_PORT: mail server port.
+            Default is 587.
+            Access variable: MainServerPort
+        * MAIL_USERNAME: mail server user name.
+            Default is "".
+            Access variable: MailUsername
+        * MAIL_PASSWORD: mail server password.
+            Default is "".
+            Access variable: MailPassword
+        * MAIL_SENDER_ADDRESS: sender email address ot use.
+            Default is "".
+            Access variable: MailSenderAddress
     """
     # Server
     ServerDebug = os.getenv('FLASK_DEBUG', '0').lower() in ('true', 't', '1', 'y', 'yes')
@@ -72,3 +88,9 @@ class GlobalConfig:
     JwtExpireTime = timedelta(seconds=int(os.getenv('JWT_EXPIRE_SECONDS', '3600')))
     AppDefaultLicenseDurationDay = os.getenv('APP_DEFAULT_DURATION_DAY', 30)
     AppMaxQueryLicenseSize = os.getenv('APP_MAX_QUERY_LICENSE_SIZE', 32)
+
+    MailServer = os.getenv('MAIL_SERVER', 'localhost')
+    MailServerPort = int(os.getenv('MAIL_SERVER_PORT', '587'))
+    MailUsername = os.getenv('MAIL_USERNAME', '')
+    MailPassword = os.getenv('MAIL_PASSWORD', '')
+    MailSenderAddress = os.getenv('MAIL_SENDER_ADDRESS', '')

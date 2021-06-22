@@ -6,7 +6,7 @@ from datetime import datetime
 from flask import Flask
 from flask.json import JSONEncoder
 from api.v1 import V1Api
-from api.jwtmanager import initializeJwt
+from api.manager import initializeJwt, initializeMail
 from api.database import initializeDb
 from api.config import GlobalConfig
 from api.timefunction import dateTimeToEpochMS
@@ -37,10 +37,16 @@ def create_app(isTesting: bool=False):
     app.testing = isTesting
     app.config['JWT_SECRET_KEY'] = GlobalConfig.JwtSecret
     app.config['JWT_ACCESS_TOKEN_EXPIRES'] = GlobalConfig.JwtExpireTime
+    app.config['MAIL_SERVER'] = GlobalConfig.MailServer
+    app.config['MAIL_PORT'] = GlobalConfig.MailServerPort
+    app.config['MAIL_USE_TLS'] = True
+    app.config['MAIL_USERNAME'] = GlobalConfig.MailUsername
+    app.config['MAIL_PASSWORD'] = GlobalConfig.MailPassword
     app.register_blueprint(V1Api, url_prefix='/api/v1')
 
     initializeDb(app)
     initializeJwt(app)
+    initializeMail(app)
     return app
 
 if __name__ == '__main__':

@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
-"""JWT manager maintenance file."""
+"""Manager maintains JWT and Mail."""
 from flask_jwt_extended import JWTManager
+from flask_mail import Mail
 from .database import constructErrorResponse
 from .config import GlobalConfig
 
 jwt = JWTManager()
+mail = Mail()
 
 def initializeJwt(app) -> None:
     """Initialize JWT manager instance."""
@@ -33,3 +35,7 @@ def initializeJwt(app) -> None:
         return constructErrorResponse(
             401, 13,
             ('JWT user is invalid: %s' % payload) if GlobalConfig.ServerDebug else '')
+
+def initializeMail(app) -> None:
+    """Initialize mail manager instance."""
+    mail.init_app(app)
