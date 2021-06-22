@@ -7,4 +7,4 @@ from ..timefunction import ZeroDateTime
 class EAStatus(me.EmbeddedDocument):
     """Defines EAStatus document used by User."""
     eaType = me.IntField(required=True)
-    expiredTime = me.DateTimeField(default=ZeroDateTime)
+    expireTime = me.DateTimeField(default=ZeroDateTime)

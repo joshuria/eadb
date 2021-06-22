@@ -30,6 +30,16 @@ DefaultPassword = 'xyzzy'
 dbclient = None
 testdb = None
 
+def initializeDB():
+    global dbclient, testdb
+    if dbclient is None:
+        dbclient = pymongo.MongoClient(host='localhost', port=27017)
+        testdb = dbclient[GlobalConfig.DbName]
+
+def getUser(userId):
+    initializeDB()
+    return testdb.user.find_one({'_id': userId})
+
 def createUser(userId: str, password: str=DefaultPassword, status:int=Status.Enabled) -> None:
     """Directly create user by operating database.
     Do nothing if user already existed.
@@ -37,17 +47,14 @@ def createUser(userId: str, password: str=DefaultPassword, status:int=Status.Ena
      :param password: password. Use global variable DefaultPassword by default.
      :param status: user default status. Default is enabled.
     """
-    global dbclient, testdb
-    if dbclient is None:
-        dbclient = pymongo.MongoClient(host='localhost', port=27017)
-        testdb = dbclient[GlobalConfig.DbName]
+    initializeDB()
     testdb.user.update_one({'_id': userId}, {
         "$set": {
             'password': password, 'status': status,
             'createTime': datetime.now(timezone.utc),
             'lastLoginTime': datetime.fromtimestamp(0, timezone.utc),
             'lastLoginIp': '',
-            'availableLicenses': [], 'auth': [],
+            'availableLicenses': [], 'auth': [], 'eaStatus': [],
             'log': [{
                 'timestamp': datetime.now(timezone.utc),
                 'operation': 16, 'ip': '', 'user': '', 'message': ''
@@ -61,10 +68,7 @@ def addLog(userId: str, n: int) -> None:
      :param userId: user's id.
      :param n: # of logs to add.
     """
-    global dbclient, testdb
-    if dbclient is None:
-        dbclient = pymongo.MongoClient(host='localhost', port=27017)
-        testdb = dbclient[GlobalConfig.DbName]
+    initializeDB()
     payload = []
     now = datetime.now().timestamp() * 1000
     past = now - 60 * 60 * 24 * 30 * 1000
@@ -89,10 +93,7 @@ def addLicense(userId: str, n: int, eaType: int, durationDay: int):
      :param eaType: type of added licenses.
      :param durationDay: duration in day of licenses.
     """
-    global dbclient, testdb
-    if dbclient is None:
-        dbclient = pymongo.MongoClient(host='localhost', port=27017)
-        testdb = dbclient[GlobalConfig.DbName]
+    initializeDB()
     lics = []
     logs = []
     now = datetime.now().timestamp() * 1000
@@ -123,7 +124,7 @@ def removeUser(userId: str):
     Do nothing if fail.
      :param userId: user's id.
     """
-    global dbclient, testdb
+    initializeDB()
     testdb.user.delete_one({'_id': userId})
 
 def verifyResponse(
@@ -343,4 +344,25 @@ def runQueryLicense(
         headers['Authorization'] = 'Bearer %s' % jwt
     return client.post(
             urllib.parse.urljoin('/api/v1/query-license', extraUrl),
+        content_type='application/json', headers=headers, data=json.dumps(payload))
+
+def runActivate(
+    client: flask.testing.FlaskClient, userId: str, jwt: str, extraUrl='',
+    payload=None, headers=GeneralHeader
+) -> flask.Response:
+    """Request POST /activate
+     :param client: flask testing client instance.
+     :param userId: new user's id.
+     :param jwt: auth JWT response.
+     :param extraUrl: extra url parameter to be appended.
+     :param payload: post payload.
+     :param headers: customized header to use.
+    """
+    if (jwt != '') and (jwt is not None):
+        if headers is GeneralHeader:
+            headers = GeneralHeader.copy()
+        headers['Authorization'] = 'Bearer %s' % jwt
+    return client.post(
+        urllib.parse.urljoin(
+            urllib.parse.urljoin('/api/v1/activate/', userId), extraUrl),
         content_type='application/json', headers=headers, data=json.dumps(payload))

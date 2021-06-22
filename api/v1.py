@@ -1,17 +1,18 @@
 # -*- coding: utf-8 -*-
 """Defines all information querying methods."""
 import json
-from json.decoder import JSONDecodeError
+from datetime import timedelta
 from typing import Tuple
 from flask import Blueprint, jsonify, make_response, request
 from flask_jwt_extended import create_access_token, get_jwt_identity, jwt_required
 import mongoengine as me
 from mongoengine.errors import DoesNotExist
+from pymongo.collection import ReturnDocument
 from .common import verifyHeader
 from .config import GlobalConfig
 from .database import constructErrorResponse
 from .model import ErrorCode, License, Log, LogOperation, Status, User
-from .timefunction import epochMSToDateTime, now
+from .timefunction import ZeroDateTime, epochMSToDateTime, now, toUTCDateTime
 
 V1Api = Blueprint('V1Api', __name__)
 
@@ -489,8 +490,7 @@ def queryLicenseStatus():
       - 200: success.
       - 400: if missing header or missing parameter.
       - 401: JWT auth fail.
-      - 403: user is disabled, JWT indentity does not match to userId, or user try to get other
-        user's data.
+      - 403: User has no privilege to perform this operation.
     Response Data:
       - result: array of only founded licenses.
           * result.id: license id.
@@ -526,5 +526,140 @@ def queryLicenseStatus():
 @V1Api.route('activate/<userId>', methods=['POST'])
 @jwt_required()
 def activateLicense(userId: str):
-    """Activate a list of licenses."""
-    raise NotImplementedError
+    """Activate a list of licenses.
+     :note: this method can be called by admin only.
+    POST parameter:
+      - param: array of license ids to use. Only first 32 items will be processed. The value '32'
+            is defined in GlobalConfig.AppMaxQueryLicenseSize.
+    Response Status Code:
+      - 200: success.
+      - 400: if missing header or missing parameter.
+      - 401: JWT auth fail.
+      - 403: User has no privilege to perform this operation.
+      - 404: userId does not exist.
+      - 409: some licenses are used.
+    Response Data:
+      - result: array of updated EA status.
+          * result.id: license id.
+          * result.duration: duration in day.
+          * result.eaType: EA type of this license.
+          * result.owner: owner id.
+          * result.buyTime: buy time in unix epoch (ms).
+          * result.activationTime: license activation time in unix epoch time (ms).
+                0 means not activated.
+          * result.activationIp: activation user's IP.
+          * result.consumer: activation user's id.
+    """
+    success, errorResponse = _generalVerify(userId, verifyUserIdFormat=False)
+    if not success:
+        return errorResponse
+    requestIds = request.json.get('param', None)
+    if requestIds is None:
+        return constructErrorResponse(
+            400, ErrorCode.InvalidParameter,
+            'Missing license id list' if GlobalConfig.ServerDebug else '')
+    # Do operation
+    eaStatus = {}
+    licenseResult = []
+    currentTime = now()
+    for lid in requestIds[:GlobalConfig.AppMaxQueryLicenseSize]:
+        user = User.getById(userId).get()
+        if len(user.eaStatus) > 0:
+            print('Origin: ', user.eaStatus[0].expireTime)
+        else:
+            print('Origin: NO data')
+        # Update license data
+        lidResult = User.objects._collection \
+            .find_one_and_update(
+                {
+                    '_id': userId,
+                    'licenses': {'$elemMatch': {'lid': lid}}
+                },
+                {
+                    '$set': {
+                        'licenses.$.activationTime': currentTime,
+                        'licenses.$.activationIp': request.remote_addr,
+                        'licenses.$.consumer': userId,
+                    },
+                },
+                projection={'licenses': {'$elemMatch': {'lid': lid}}, 'eaStatus': 1},
+                return_document=ReturnDocument.AFTER)
+        print('lidResult', lidResult)
+        if (lidResult is None) or ('licenses' not in lidResult):
+            licenseResult.append({'id': lid, 'result': ErrorCode.LicenseNotExist})
+            continue
+        eaType = lidResult['licenses'][0]['eaType']
+        duration = lidResult['licenses'][0]['duration']
+        # Update EA status
+        for status in lidResult['eaStatus']:
+            if status['eaType'] != eaType:
+                continue
+            # Found EA status record, update it
+            dueTime = status['expireTime'] + timedelta(days=duration)
+            statusResult = User.objects._collection \
+                .find_one_and_update(
+                    {
+                        '_id': userId,
+                        'eaStatus': {'$elemMatch': {'eaType': eaType}}
+                    },
+                    {
+                        '$set': {
+                            'eaStatus.$.expireTime': dueTime
+                        },
+                    },
+                    projection={'eaStatus': {'$elemMatch': {'eaType': eaType}}},
+                    return_document=ReturnDocument.AFTER)
+            print(' =====> Update EA status', statusResult)
+            break
+        else:
+            # EA status does not exist, add it
+            statusResult = User.objects._collection \
+                .find_one_and_update(
+                    {
+                        '_id': userId,
+                        'eaStatus': {'$not': {'$elemMatch': {'eaType': eaType}}}
+                    },
+                    {
+                        '$addToSet': {
+                            'eaStatus': {
+                                'eaType': eaType,
+                                'expireTime': currentTime + timedelta(days=duration)
+                            }
+                        },
+                    },
+                    projection={'eaStatus': {'$elemMatch': {'eaType': eaType}}},
+                    return_document=ReturnDocument.AFTER)
+            print(' =====> Create EA status', statusResult)
+
+        ## Add EA status if not exist
+        ## Update EA status
+        #statusResult = User.objects.aggregate([
+        #    {'$match': { '_id': userId }},
+        #    {'$unwind': '$eaStatus'},
+        #    {'$match': {'eaStatus.eaType': eaType}},
+        #    #{'$set': {'eaStatus.expireTime': {'$add': ['$eaStatus.expireTime', duration]}}},
+        #    {'$set': {'eaStatus.expireTime': {'$add': ['$eaStatus.expireTime', 99999999999]}}},
+        #    {'$project': {'_id': 0, 'eaStatus': 1}},
+        #])
+        #
+        currentStatus = None
+        for s in statusResult['eaStatus']:
+            if s['eaType'] != eaType:
+                continue
+            currentStatus = s
+            break
+        else:
+            # No EA type responsed, should be fail
+            print('License %s activation fail on user %s' % (lid, userId))
+            licenseResult.append({'id': lid, 'result': ErrorCode.LicenseConsumedButActivateFail})
+            continue
+
+        # TODO validate expire time is correct
+
+        licenseResult.append({'id': lid, 'result': ErrorCode.NoError})
+        eaStatus[eaType] = currentStatus['expireTime']
+
+    return make_response(jsonify({
+        'eaStatus': [{'eaType': key, 'expireTime': value} for key, value in eaStatus.items()],
+        'license': licenseResult
+    }), 200) if success else errorResponse

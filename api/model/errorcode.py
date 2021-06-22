@@ -25,3 +25,7 @@ class ErrorCode:
     AuthAdminOnly = 0x300
     AuthUserNotMatch = 0x301
     AuthUserDisabled = 0x302
+
+    # Activate
+    LicenseNotExist = 0x400
+    LicenseConsumedButActivateFail = 0x401

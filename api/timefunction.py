@@ -21,6 +21,10 @@ def dateTimeToEpoch(dt: datetime) -> float:
     """Convert datetime instance to unix epoch (ms)."""
     return dt.replace(tzinfo=timezone.utc).timestamp() if dt.tzinfo is None else dt.timestamp()
 
+def toUTCDateTime(dt: datetime) -> datetime:
+    """Convert to UTC timezone."""
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
 def nowUnixEpochMS() -> int:
     """Get current unix epoch (ms)."""
     return nowUnixEpoch() * 1000
