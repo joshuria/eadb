@@ -27,5 +27,10 @@ class ErrorCode:
     AuthUserDisabled = 0x302
 
     # Activate
-    LicenseNotExist = 0x400
-    LicenseConsumedButActivateFail = 0x401
+    LicenseActivatedOrNotExist = 0x400
+    LicenseNotMatchToUserState = 0x401
+    LicenseConsumedButActivateToDBFail = 0x402
+    LicenseCannotUpdateDB = 0x403
+
+    # Internal Error
+    InternalCannotInsertUser = 0x1000

@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 """ Common validator and utility functions. """
-from typing import Tuple
-from .model import ErrorCode
+from typing import Dict, Tuple
+from flask import jsonify, make_response
 from .config import GlobalConfig
-from .manager import mail
-from flask_mail import Message
+from .model import ErrorCode
 
 
-def verifyHeader(headers) -> Tuple[bool, str, int]:
+def verifyRequiredHeader(headers) -> Tuple[bool, str, int]:
     """Verify request headers.
     Note that the "Authorization" header is checked by JWT.
     Common headers:
@@ -38,8 +37,43 @@ def verifyHeader(headers) -> Tuple[bool, str, int]:
             else  (False, "", ErrorCode.InvalidUserAgent)
     return True, "", ErrorCode.NoError
 
-def sendMail(address: str, title: str, body: str) -> None:
-    """Send mail to user. """
-    msg = Message(title, sender=GlobalConfig.MailSenderAddress, recipients=[address])
-    msg.body = body
-    mail.send(msg)
+def constructErrorResponse(httpCode: int, code: int, msg: str = '') -> str:
+    """Construct ErrorResult response string."""
+    return make_response(jsonify({ 'code': code, 'msg': msg }), httpCode)
+
+def generalVerify(
+    headers: Dict[str, str],
+    adminOnly: bool=False, maintenanceOnly: bool=False
+) -> Tuple[bool, str]:
+    """Do common verification flow. Include:
+      - Headers: x-access-apikey, x-access-name, x-access-version, User-Agent (400)
+     :param headers: request headers, i.e. `flask.request.headers`.
+     :param adminOnly: specify if the access client must be admin role.
+     :param maintenanceOnly: specify if the access client must be maintenance role.
+     :return: tuple of:
+          - verify success or fail.
+          - verify fail response
+    """
+    # Verify header (400)
+    result, msg, code = verifyRequiredHeader(headers)
+    if not result:
+        return False, constructErrorResponse(400, code, msg)
+    apiKey = headers['x-access-apikey']
+    if adminOnly:
+        if apiKey not in (GlobalConfig.ApiAdminKey, GlobalConfig.ApiMaintenanceKey):
+            return False, constructErrorResponse(
+                403, ErrorCode.AuthAdminOnly,
+                'Cannot use admin only API' if GlobalConfig.ServerDebug else '')
+    elif maintenanceOnly:
+        if apiKey != GlobalConfig.ApiMaintenanceKey:
+            return False, constructErrorResponse(
+                403, ErrorCode.AuthAdminOnly,
+                'Cannot use maintenance only API' if GlobalConfig.ServerDebug else '')
+    else:
+        if apiKey not in (
+            GlobalConfig.ApiAdminKey, GlobalConfig.ApiMaintenanceKey, GlobalConfig.ApiAppKey
+        ):
+            return False, constructErrorResponse(
+                403, ErrorCode.AuthAdminOnly,
+                'Cannot use API' if GlobalConfig.ServerDebug else '')
+    return True, ''

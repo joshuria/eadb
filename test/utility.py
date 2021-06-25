@@ -3,129 +3,189 @@
 import os
 import sys
 import random
-import string
 
 sys.path.insert(
     0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 )
 
+from typing import Dict, Tuple, List
+import string
 import json
 from datetime import datetime, timezone
 import urllib.parse
-import pymongo
+import pytest
 import flask
 import flask.testing
+from mongoengine.errors import DoesNotExist, NotUniqueError
 from api.config import GlobalConfig
-from api.model import Status, License, LogOperation
+from api.model import User, Status, License, Log, LogOperation, ProductStatus
 from api.timefunction import dateTimeToEpochMS, now, ZeroDateTime
+from test.conftest import client
 
 
 GeneralHeader = {
     'User-Agent': 'testing-api-user-agent',
-    'x-access-apikey': os.getenv('API_KEYS', ''),
+    'x-access-apikey': os.getenv('API_ADMIN_KEY', ''),
     'x-access-name': 'testing-case-api',
     'x-access-version': '0.0.1',
 }
 DefaultPassword = 'xyzzy'
-dbclient = None
-testdb = None
 
-def initializeDB():
-    global dbclient, testdb
-    if dbclient is None:
-        dbclient = pymongo.MongoClient(host='localhost', port=27017)
-        testdb = dbclient[GlobalConfig.DbName]
 
-def getUser(userId):
-    initializeDB()
-    return testdb.user.find_one({'_id': userId})
+def getUser(userId: str) -> User:
+    """Get user instance."""
+    try:
+        return User.objects(uid=userId).get()
+    except DoesNotExist:
+        return None
 
-def createUser(userId: str, password: str=DefaultPassword, status:int=Status.Enabled) -> None:
-    """Directly create user by operating database.
+@pytest.fixture(scope='function')
+def createUsers(client: flask.testing.FlaskClient):
+    """Create a list of users.
     Do nothing if user already existed.
-     :param userId: user's id.
-     :param password: password. Use global variable DefaultPassword by default.
-     :param status: user default status. Default is enabled.
+     :param client: flask testing client instance.
     """
-    initializeDB()
-    testdb.user.update_one({'_id': userId}, {
-        "$set": {
-            'password': password, 'status': status,
-            'createTime': datetime.now(timezone.utc),
-            'lastLoginTime': datetime.fromtimestamp(0, timezone.utc),
-            'lastLoginIp': '',
-            'availableLicenses': [], 'auth': [], 'eaStatus': [],
-            'log': [{
-                'timestamp': datetime.now(timezone.utc),
-                'operation': 16, 'ip': '', 'user': '', 'message': ''
-            }]
-        }
-    }, upsert=True)
+    users = []
+    skipRemove = [False]
+    def _m(info: List[Tuple[str, Status]], noRemove: bool=False) -> List[User]:
+        """ Create user real implement.
+         :param info: list of user info. Each user info is a tuple contains:
+            - user's id.
+            - user default status. Default is enabled.
+         :return: list of created user instances.
+        """
+        print('Fixture:: Create Users %s' % ('without removing' if noRemove else ''))
+        skipRemove[0] = noRemove
+        for u in info:
+            if type(u) is not Tuple:
+                u = u, Status.Enabled
+            user = User(uid=u[0], status=u[1])
+            try:
+                user.save(force_insert=True)
+            except NotUniqueError:
+                print('CreateUsers: user %s already exist.' % u[0])
+                user = User.objects(uid=u[0]).get()
+            users.append(user)
+        return users
+    # Call next
+    yield client, _m
+    # Finalize
+    if skipRemove[0]:
+        print('Fixture:: Create Users skip removing %d users' % len(users))
+    else:
+        print('Fixture:: Create Users finalize remove %d users' % len(users))
+        for u in users:
+            u.delete()
 
-def addLog(userId: str, n: int) -> None:
-    """Directly add log to user.
+@pytest.fixture(scope='function')
+def removeUsers(client: flask.testing.FlaskClient):
+    """Remove dynamic created users after test (teardown).
     Do nothing if user already existed.
-     :param userId: user's id.
-     :param n: # of logs to add.
+     :param client: flask testing client instance.
     """
-    initializeDB()
-    payload = []
-    now = datetime.now().timestamp() * 1000
-    past = now - 60 * 60 * 24 * 30 * 1000
-    for i in range(n):
-        payload.append({
-            'timestamp': datetime.fromtimestamp((past + (now - past) / n * i) * .001, timezone.utc),
-            'operation': 16,
-            'ip': ''.join(random.choice(string.ascii_lowercase) for x in range(16)),
-            'user': 'testing %d' % i
-        })
-    testdb.user.update_one({'_id': userId}, {
-        "$push": {
-            'log': { '$each': payload }
-        }
-    }, upsert=False)
+    users = []
+    def _m(info: List[str]) -> None:
+        """Register user ids to be removed when teardown.
+         :param info: user id list.
+         :return: list of created user instances.
+        """
+        users.extend(info)
+    # Call next
+    yield client, _m
+    # Finalize
+    print('Fixture:: Remove Users remove %d users' % len(users))
+    for u in users:
+        if type(u) is User:
+            u.delete()
+        else:
+            User.objects(uid=u).delete()
 
-def addLicense(userId: str, n: int, eaType: int, durationDay: int):
-    """Directly add log to user.
-    Do nothing if user already existed.
-     :param userId: user's id.
-     :param n: # of licenses to add.
-     :param eaType: type of added licenses.
-     :param durationDay: duration in day of licenses.
+@pytest.fixture(scope='function')
+def addLogs(client: flask.testing.FlaskClient) -> None:
+    """Add n logs.
+     :param client: flask testing client instance.
     """
-    initializeDB()
-    lics = []
-    logs = []
-    now = datetime.now().timestamp() * 1000
-    past = now - 60 * 60 * 24 * 30 * 1000
-    for i in range(n):
-        ts = datetime.fromtimestamp((past + (now - past) / n * i) * .001, timezone.utc)
-        lics.append({
-            'lid': License.generateId(),
-            'buyTime': ts, 'eaType': eaType, 'duration': durationDay, 'owner': userId,
-            'consumer': '', 'activationTime': dateTimeToEpochMS(ZeroDateTime), 'activationIp': ''
-        })
-        logs.append({
-            'timestamp': ts,
-            'operation': LogOperation.LicenseBuy,
-            'ip': ''.join(random.choice(string.ascii_lowercase) for x in range(16)),
-            'user': 'testing %d' % i
-        })
-    testdb.user.update_one({'_id': userId}, {
-        "$push": {
-            'log': { '$each': logs },
-            'licenses': { '$each': lics }
-        }
-    }, upsert=False)
-    return lics
+    def _m(user: User, n: int, op: LogOperation) -> List[Log]:
+        """Add logs implementation.
+         :param n: # of logs to add.
+         :param op: operation code of each log.
+        """
+        print('Fixture: Call Add Logs')
+        if type(user) is User:
+            user = user.uid
+        payload = []
+        now = datetime.now().timestamp()
+        past = now - 60 * 60 * 24 * 30
+        for i in range(n):
+            payload.append(Log(
+                user=user,
+                timestamp=datetime.fromtimestamp(past + (now - past) / n * i, timezone.utc),
+                operation=op,
+                ip=''.join(random.choice(string.ascii_lowercase) for x in range(16)),
+                message='Manually added log!!'
+            ))
+        # push_all will reverse order?
+        Log.objects.insert(payload)
+        #User.objects(uid=user).update_one(push_all__log=payload)
+        return payload
+    yield client, _m
 
-def removeUser(userId: str):
-    """Directly remove user by operating database.
-    Do nothing if fail.
-     :param userId: user's id.
+@pytest.fixture(scope='function')
+def clearLogs(client: flask.testing.FlaskClient) -> None:
+    """Add n logs.
+     :param client: flask testing client instance.
     """
-    initializeDB()
-    testdb.user.delete_one({'_id': userId})
+    yield client
+    print('Fixture: Clear Logs')
+    Log.drop_collection()
+
+@pytest.fixture(scope='function')
+def addProducts(client: flask.testing.FlaskClient) -> None:
+    """Add n productStatus to user.
+     :param client: flask testing client instance.
+    """
+    def _m(user: User, broker: str, eaId: str, mId: str, expireTime: datetime) -> ProductStatus:
+        """Add logs implementation.
+         :param n: # of logs to add.
+         :param broker: broker name.
+         :param eaId: id of ea.
+         :param mId: the mId.
+         :param expireTime: expire time in UTC of this product.
+        """
+        print('Fixture: Call Add Products')
+        status = ProductStatus(broker=broker, eaId=eaId, mId=mId, expireTime=expireTime)
+        if type(user) is User:
+            User.objects(uid=user.uid).update_one(push__productStatus=status)
+        else:
+            User.objects(uid=user).update_one(push__productStatus=status)
+        return status
+    yield client, _m
+
+@pytest.fixture(scope='function')
+def addLicenses(client: flask.testing.FlaskClient) -> None:
+    """Add n licenses to user.
+     :param client: flask testing client instance.
+    """
+    def _m(user: User, n: int, broker: str, eaId: str, duration=30) -> List[License]:
+        """Add logs implementation.
+         :param n: # of logs to add.
+         :param broker: broker name.
+         :param eaId: id of ea.
+         :param duration: duration day of added licenses.
+        """
+        print('Fixture: Call Add Licenses')
+        payload = []
+        if type(user) is User:
+            user = user.uid
+        # now = datetime.now().timestamp()
+        # past = now - 60 * 60 * 24 * 30
+        for i in range(n):
+            payload.append(License(
+                broker=broker, eaId=eaId, owner=user, duration=duration
+            ))
+        User.objects(uid=user).update_one(push_all__license=payload)
+        return payload
+    yield client, _m
 
 def verifyResponse(
     client: flask.testing.Client, response: flask.Response,
@@ -142,7 +202,7 @@ def verifyResponse(
     print('Response status code: ', response.status)
     print('Response content type: ', response.content_type)
     try:
-        print('Response data as json: ', response.json)
+        print('Response data as json: ', json.dumps(response.json, indent=4))
     except:
         print('Response data is not json: ', response.data)
     if 'JWT' in response.headers:
@@ -262,10 +322,10 @@ def runDeleteUser(
         data=json.dumps(payload))
 
 def runGetUserLog(
-    client: flask.testing.FlaskClient, userId: str, jwt: str, extraUrl='',
+    client: flask.testing.FlaskClient, jwt: str, extraUrl='',
     payload=None, headers=GeneralHeader
 ) -> flask.Response:
-    """Request GET /user-log/<userId>
+    """Request GET /log
      :param client: flask testing client instance.
      :param userId: new user's id.
      :param jwt: auth JWT response.
@@ -278,18 +338,15 @@ def runGetUserLog(
             headers = GeneralHeader.copy()
         headers['Authorization'] = 'Bearer %s' % jwt
     return client.get(
-        urllib.parse.urljoin(
-            urllib.parse.urljoin('/api/v1/user-log/', userId), extraUrl),
-        content_type='application/json', headers=headers,
-        query_string=payload)
+        urllib.parse.urljoin('/api/v1/log', extraUrl),
+        headers=headers, query_string=payload)
 
 def runBuyLicense(
-    client: flask.testing.FlaskClient, userId: str, jwt: str, extraUrl='',
+    client: flask.testing.FlaskClient, jwt: str, extraUrl='',
     payload=None, headers=GeneralHeader
 ) -> flask.Response:
-    """Request POST /license/<userId>
+    """Request POST /license
      :param client: flask testing client instance.
-     :param userId: new user's id.
      :param jwt: auth JWT response.
      :param extraUrl: extra url parameter to be appended.
      :param payload: post payload.
@@ -300,8 +357,7 @@ def runBuyLicense(
             headers = GeneralHeader.copy()
         headers['Authorization'] = 'Bearer %s' % jwt
     return client.post(
-        urllib.parse.urljoin(
-            urllib.parse.urljoin('/api/v1/license/', userId), extraUrl),
+        urllib.parse.urljoin('/api/v1/license', extraUrl),
         content_type='application/json', headers=headers, data=json.dumps(payload))
 
 def runGetLicense(
@@ -347,12 +403,11 @@ def runQueryLicense(
         content_type='application/json', headers=headers, data=json.dumps(payload))
 
 def runActivate(
-    client: flask.testing.FlaskClient, userId: str, jwt: str, extraUrl='',
+    client: flask.testing.FlaskClient, jwt: str, extraUrl='',
     payload=None, headers=GeneralHeader
 ) -> flask.Response:
     """Request POST /activate
      :param client: flask testing client instance.
-     :param userId: new user's id.
      :param jwt: auth JWT response.
      :param extraUrl: extra url parameter to be appended.
      :param payload: post payload.
@@ -363,6 +418,5 @@ def runActivate(
             headers = GeneralHeader.copy()
         headers['Authorization'] = 'Bearer %s' % jwt
     return client.post(
-        urllib.parse.urljoin(
-            urllib.parse.urljoin('/api/v1/activate/', userId), extraUrl),
+        urllib.parse.urljoin('/api/v1/activate', extraUrl),
         content_type='application/json', headers=headers, data=json.dumps(payload))

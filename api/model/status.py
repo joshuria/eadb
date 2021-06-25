@@ -11,4 +11,4 @@ class Status():
     @staticmethod
     def getAllStatus():
         """Get all supported status."""
-        return (Status.Disabled, Status.Enabled)
+        return (Status.Disabled, Status.Enabled, Status.Removed)

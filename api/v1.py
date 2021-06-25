@@ -1,69 +1,24 @@
 # -*- coding: utf-8 -*-
 """Defines all information querying methods."""
-import json
 from datetime import timedelta
-from typing import Tuple
-from flask import Blueprint, jsonify, make_response, request
-from flask_jwt_extended import create_access_token, get_jwt_identity, jwt_required
+from typing import Dict, List
+import json
+from flask import Blueprint, jsonify, make_response, Response, request, current_app
+from flask_jwt_extended import jwt_required
 import mongoengine as me
-from mongoengine.errors import DoesNotExist
-from pymongo.collection import ReturnDocument
-from .common import verifyHeader, sendMail
+from .common import generalVerify, constructErrorResponse
 from .config import GlobalConfig
-from .database import constructErrorResponse
 from .model import ErrorCode, License, Log, LogOperation, Status, User
-from .timefunction import ZeroDateTime, epochMSToDateTime, now
+from .manager import JwtManager
+from . import timefunction
 
 V1Api = Blueprint('V1Api', __name__)
 
 
-def _generalVerify(
-    userId: str, verifyUserIdFormat: bool=True, verifyJWT: bool=True, adminOnly: bool=False
-) -> Tuple[bool, str]:
-    """Do common verification flow. Include:
-     - Headers: x-access-apikey, x-access-name, x-access-version, User-Agent (400)
-     - JWT identify info verify (403)
-     - User id format (400)
-     :param userId: user's id.
-     :param verifyUserIdFormat: verify user's id must be email.
-     :param verifyJWT: verify JWT identify is specify userId or admin.
-     :param adminOnly: specify if the user must be admin.
-     :note: this method is not suitable for `/auth`.
-     :return: tuple of:
-          - verify success or fail.
-          - verify fail response
-    """
-    # Verify header (400)
-    result, msg, code = verifyHeader(request.headers)
-    if not result:
-        return False, constructErrorResponse(400, code, msg)
-    if userId is None:
-        return (False, constructErrorResponse(
-            400, ErrorCode.MissingParameter,
-            'Missing userId' if GlobalConfig.ServerDebug else ''))
-    # Verify userId's format (400)
-    if verifyUserIdFormat and (not User.verifyUserId(userId)):
-        return (False, constructErrorResponse(
-                400, ErrorCode.InvalidParameter,
-                'Invalid user id format' if GlobalConfig.ServerDebug else ''))
-    # Check JWT with userId (403)
-    if verifyJWT:
-        # Verify if is admin only
-        activeUser = get_jwt_identity()
-        if adminOnly and (activeUser != GlobalConfig.DbDefaultAdmin):
-            return False, constructErrorResponse(
-                403, ErrorCode.AuthAdminOnly,
-                'JWT active user is not admin' if GlobalConfig.ServerDebug else '')
-        if (not adminOnly) and (activeUser not in (GlobalConfig.DbDefaultAdmin, userId)):
-            return False, constructErrorResponse(
-                403, ErrorCode.AuthUserNotMatch,
-                'JWT active user is not current user' if GlobalConfig.ServerDebug else '')
-    return True, ''
-
 #@V1Api.route('/auth', defaults={'login': 0}, methods=['POST'])
 @V1Api.route('/auth', methods=['POST'])
 @V1Api.route('/auth/<int:login>', methods=['POST'])
-def auth(login: int=0):
+def auth(login: int=0) -> Response:
     """Do JWT auth and (optionally) get user detail info.
     URL parameter:
       - login: this auth is also for user login. Basic user info is required.
@@ -84,583 +39,357 @@ def auth(login: int=0):
       - eaStatus
       - log
     """
+    success, msg = generalVerify(request.headers)
+    if not success: return msg
+    # Validate parameter
     if request.json is None:
         # When client does not send any payload, request.json will be None
         return constructErrorResponse(
             400, ErrorCode.MissingParameter,
-            'Missing userId or password' if GlobalConfig.ServerDebug else '')
+            'Missing userId or password' if GlobalConfig.ServerDebug else ''
+        )
     userId = request.json.get('userId', None)
     password = request.json.get('password', None)
     if (userId is None) or (password is None):
         return constructErrorResponse(
             400, ErrorCode.MissingParameter,
-            'Missing userId or password' if GlobalConfig.ServerDebug else '')
-    # Verify header
-    success, errorResponse = _generalVerify(userId, False, False)
-    if not success:
-        return errorResponse
+            'Missing userId or password' if GlobalConfig.ServerDebug else ''
+        )
+    ## TODO: auth to firebase
+    jwtToken = JwtManager.generateToken(userId)
+
     # Get user
-    query = User.getById(
-        userId, excludeList=[] if login == 1 else ['uid', 'availableLicenses', 'auth', 'log'])
-    try:
-        user = query.get()
-    except me.errors.DoesNotExist:
-        user = None
-    if (user is None) or (user.password != password):
+    # The query & insert may fail when concurrently query the same user, must retry here
+    for retry in range(8):
+        query = User.objects(uid=userId)
+        if login:
+            query.only('status', 'createTime', 'productStatus', 'license')
+        else:
+            query.only('status')
+        try:
+            user = query.get()
+        except me.errors.DoesNotExist:
+            # This is new user
+            user = User(uid=userId)
+            try:
+                user.save(force_insert=True)
+            except me.errors.NotUniqueError as e:
+                # Already exist, retry
+                continue
+        break
+    else:
+        # Retry n times but still fail:
         return constructErrorResponse(
-            404, ErrorCode.InvalidParameter,
-            'Invalid userId or password' if GlobalConfig.ServerDebug else '')
+            404, ErrorCode.InternalCannotInsertUser,
+            'Fail to query/insert user. Please retry.' if GlobalConfig.ServerDebug else ''
+        )
     if user.status == Status.Disabled:
         return constructErrorResponse(
             403, ErrorCode.AuthUserDisabled,
-            'User is disabled' if GlobalConfig.ServerDebug else '')
+            'User is disabled' if GlobalConfig.ServerDebug else ''
+        )
     # Success
-    # TODO: optional: write login log if detail = 1
-    user.password = None
-    response = make_response(jsonify(user) if login == 1 else jsonify(), 200)
-    response.headers['JWT'] = create_access_token(identity=userId)
+    if login:
+        data = {
+            'createTime': user.createTime,
+            'productStatus': user.productStatus,
+            'license': user.license,
+        }
+    else:
+        data = {}
+    response = make_response(jsonify(data), 200)
+    response.headers['JWT'] = jwtToken
     return response
 
-@V1Api.route('user/<userId>', methods=['GET'])
+@V1Api.route('log', methods=['GET'])
 @jwt_required()
-def queryUser(userId: str):
-    """Query given user's all available products state.
-     :param userId: user's id.
-     :note: this method will NOT verify userId's format.
-    URL parameter:
-      - userId: user's id to query. This is limited to use email format.
-    Response Status Code:
-      - 200: success.
-      - 400: if missing header or missing parameter (userId).
-      - 401: JWT auth fail.
-      - 403: user is disabled, JWT indentity does not match to userId, or user try to get other
-        user's data.
-      - 404: user not found.
-    Response Data:
-      - createTime
-      - status
-      - lastLoginTime
-      - lastLoginIp
-      - eaStatus
-      - log
-      - licenses
-    """
-    success, errorResponse = _generalVerify(userId)
-    if not success:
-        return errorResponse
-    query = User.getById(userId, excludeList=('password', 'auth'))
-    try:
-        user = query.get()
-    except me.errors.DoesNotExist:
-        user = None
-    if user is None:
-        return constructErrorResponse(
-            404, ErrorCode.AuthUserNotMatch,
-            'Invalid userId or password' if GlobalConfig.ServerDebug else '')
-    #if user.status == Status.Disabled:
-    #    return constructErrorResponse(
-    #        403, ErrorCode.AuthUserDisabled,
-    #        'User is disabled' if GlobalConfig.ServerDebug else '')
-    return make_response(jsonify(user), 200) if success else errorResponse
-
-@V1Api.route('user/<userId>', methods=['POST'])
-@jwt_required()
-def createUser(userId: str):
-    """Create a new user (call by admin only).
-     :param userId: user's id.
-    URL parameter:
-      - userId: user's id to query. This is limited to use email format.
-    POST parameters:
-      - password: user's hashed password.
-      - status: (optional) user's default status. Default is 1 (enabled).
-    Response Status Code:
-      - 200: success.
-      - 400: invalid parameter format, missing header, or missing parameter.
-      - 401: JWT auth fail.
-      - 403: JWT identify user does not have priviledge.
-      - 409: userId already exist.
-    """
-    success, errorResponse = _generalVerify(userId, adminOnly=True)
-    if not success:
-        return errorResponse
-    # Verify other fields
-    password = request.json.get('password', None)
-    if password is None:
-        return constructErrorResponse(
-            400, ErrorCode.MissingParameter,
-            'Missing password' if GlobalConfig.ServerDebug else '')
-    # Insert new user
-    user = User(
-        uid=userId,
-        password=password,
-        status=request.json.get('status', Status.Enabled),
-        log=[Log(operation=LogOperation.CreateUser, ip=request.remote_addr)])
-    try:
-        user.save(force_insert=True)
-    except me.errors.NotUniqueError:
-        return constructErrorResponse(
-            409, ErrorCode.UserAlreadyExist,
-            'User alreay exists' if GlobalConfig.ServerDebug else '')
-    return make_response(jsonify({}), 200)
-
-@V1Api.route('user/<userId>', methods=['PUT'])
-@jwt_required()
-def modifyUser(userId: str):
-    """Modify user's data.
-     :param userId: user's id.
-    URL parameter:
-      - userId: target user's id to update, must be email format.
-    PUT parameters:
-      - password: (optional) user's new hashed password.
-      - status: (optional) user's new status.
-    Response Status Code:
-      - 200: success.
-      - 400: invalid parameter format, missing header, or missing parameter.
-      - 401: JWT auth fail.
-      - 403: JWT identify user does not have priviledge.
-      - 404: userId does not exist.
-    """
-    success, errorResponse = _generalVerify(userId)
-    if not success:
-        return errorResponse
-    # Update data
-    conditions = {}
-    for c in ('password', 'status'):
-        value = request.json.get(c, None)
-        # TODO: verify password must not empty
-        if value is not None:
-            conditions[c] = value
-    try:
-        result = User.getById(userId).update_one(**conditions)
-    except me.errors.ValidationError as e:
-        return constructErrorResponse(
-            400, ErrorCode.InvalidParameter,
-            'Parameter validation fail: %s' % e.message if GlobalConfig.ServerDebug else '')
-    if result == 0:
-        # update_one doesn't raise DoesNotExist, so use result count
-        return constructErrorResponse(
-            404, ErrorCode.UserNotExist,
-            'UserId not exist' if GlobalConfig.ServerDebug else '')
-    # TODO: write modify log
-    return make_response(jsonify({}), 200)
-
-@V1Api.route('user/<userId>', methods=['DELETE'])
-@jwt_required()
-def deleteUser(userId: str):
-    """Modify user's data (call by admin only).
-     :param userId: user's id.
-    URL parameter:
-      - userId: target user's id to update, must be email format.
-    Response Status Code:
-      - 200: success.
-      - 400: invalid parameter format, missing header, or missing parameter.
-      - 401: JWT auth fail.
-      - 403: JWT identify user does not have priviledge.
-      - 404: userId does not exist.
-    """
-    success, errorResponse = _generalVerify(userId, adminOnly=True)
-    if not success:
-        return errorResponse
-    # Update data
-    result = User.getById(userId).delete()
-    if result == 0:
-        # delete doesn't raise DoesNotExist, so use result count
-        return constructErrorResponse(
-            404, ErrorCode.UserNotExist,
-            'UserId not exist' if GlobalConfig.ServerDebug else '')
-    # TODO: write delete log
-    return make_response(jsonify({}), 200)
-
-@V1Api.route('user-log/<userId>', methods=['GET'])
-@jwt_required()
-def getUserLog(userId: str):
+def getUserLog() ->  Response:
     """Get user's operation log.
-     :param userId: user's id.
-    URL parameter:
-      - userId: target user's id to update, must be email format.
     GET parameter:
       - size: max size of items to return. Default is 32.
-      - startTime: starting time in unix epoch (ms), included.
+      - startTime: starting time in unix epoch (ms), included. Default is 0.
       - endTime: end time in unix epoch (ms), excluded. Default is now.
     Response Status Code:
       - 200: success.
       - 400: invalid parameter format, missing header, or missing parameter.
       - 401: JWT auth fail.
-      - 403: JWT identify user does not have priviledge.
-      - 404: userId does not exist.
+      - 403: user is disabled.
     Response Data:
-      - remain: remaining logs count.
-      - result: array of log.
-          * result.timestamp: unix epoch timestamp (ms).
+      - nextEndTime: next query endTime, for paging use.
+      - log: array of logs.
+          * timestamp: unix epoch timestamp (ms).
           * operation: operation type of this log.
           * ip: IP.
-          * user: extra joined user.
           * message: extra message.
     """
-    success, errorResponse = _generalVerify(userId)
-    if not success:
-        return errorResponse
-    # Parameters
-    size = request.values.get('size', 32, type=int)
-    startTime = request.values.get('startTime', None, type=float)
-    endTime = request.values.get('endTime', None, type=float)
-    if startTime is None:
+    success, msg = generalVerify(request.headers)
+    if not success: return msg
+    # Validate parameter
+    try:
+        size = request.values.get('size', 32, type=int)
+        startTime = request.values.get('startTime', 0, type=int)
+        endTime = request.values.get('endTime', 0, type=int)
+    except ValueError:
         return constructErrorResponse(
             400, ErrorCode.InvalidParameter,
-            'Missing startTime' if GlobalConfig.ServerDebug else '')
-    startTime = epochMSToDateTime(startTime)
-    endTime = now() \
-        if (endTime is None) or (endTime == 0) \
-        else epochMSToDateTime(endTime)
-    # Check user exist
-    # TODO
-    # endTime < startTime: return nothing
-    if endTime < startTime:
-        return make_response(jsonify({'remain': 0, 'result': []}), 200)
-    # Do query
-    result = User.objects.aggregate([
-        {'$match': { '_id': userId }},
-        {'$unwind': '$log'},
-        {'$match': { 'log.timestamp': {'$gte': startTime, '$lt': endTime}}},
-        {'$project': {'_id': 0, 'log': 1}},
-        {'$sort': {'log.timestamp': -1}},
-        {'$limit': size},
-    ])
-    result = [l['log'] for l in result]
-    return make_response(jsonify({'remain': len(result), 'result': result}), 200)
+            'Invalid parameter' if GlobalConfig.ServerDebug else ''
+        )
+    startTime = timefunction.epochMSToDateTime(startTime)
+    endTime = timefunction.epochMSToDateTime(endTime) if endTime != 0 else timefunction.now()
+    userId = JwtManager.getCurrentUserId()
+    current_app.logger.info('Start time: %s, End time: %s', startTime, endTime)
+    # query
+    result = Log.objects(user=userId, timestamp__gte=startTime, timestamp__lt=endTime) \
+        .exclude('id').limit(size).order_by('-timestamp')
+    data = [log.to_mongo() for log in result]
+    return make_response(jsonify({
+        # 'nextTime': (data[-1]['timestamp'] + timedelta(milliseconds=1)) if len(data) > 0 else 0,
+        'nextTime': data[-1]['timestamp'] if len(data) > 0 else 0,
+        'log': data
+    }), 200)
 
-@V1Api.route('license/<userId>', methods=['POST'])
+@V1Api.route('license', methods=['POST'])
 @jwt_required()
-def buyLicense(userId: str):
+def buyLicense() -> Response:
     """Buy license for specified user (call by admin only).
-     :param userId: user's id.
-    URL parameter:
-      - userId: user's id to query. This is limited to use email format.
     POST parameters:
-      - param: array of data.
-      - param.eaType: type of EA to buy.
-      - param.count: # of licenses of specified EAType to buy.
-      - param.duration: duration day of license. Default is 30 days.
+      + array of the following:
+        - broker: broker name.
+        - eaId: eaId.
+        - count: # of specified (broker, eaId) licenses to buy.
+        - duration: duration day of license. Default is 30 days.
     Response Status Code:
       - 200: success.
       - 400: invalid parameter format, missing header, or missing parameter.
       - 401: JWT auth fail.
-      - 403: JWT identify user does not have priviledge.
-      - 409: userId already exist.
+      - 403: Client has no privildge to do this operation.
     Response Data:
       - count: # of success added licenses.
       - result: array.
           * result.id: license ID.
-          * result.eaType: EAType of this license.
+          * result.broker: broker of this license.
+          * result.eaId: EAId of this license.
           * result.duration: duration of this license.
     """
-    success, errorResponse = _generalVerify(userId, adminOnly=True)
-    if not success:
-        return errorResponse
-    # Verify other fields
-    param = request.json.get('param', None)
-    if param is None:
+    success, msg = generalVerify(request.headers, adminOnly=True)
+    if not success: return msg
+    # Validate parameters
+    req = request.json # type: List[Dict[str, int|str]]
+    if req is None:
+        # When client does not send any payload, request.json will be None
         return constructErrorResponse(
             400, ErrorCode.MissingParameter,
-            'Missing parameter' if GlobalConfig.ServerDebug else '')
-    #try:
-    #    param = json.loads(param)
-    #except JSONDecodeError:
-    #    return constructErrorResponse(
-    #        400, ErrorCode.InvalidParameter,
-    #        'Invalid parameter' if GlobalConfig.ServerDebug else '')
-
-    userQuery = User.getById(userId)
-    ## Check user exist <- delegate to userId
-    #try:
-    #    u = userQuery.only('_id').get()
-    #    print(u)
-    #except DoesNotExist:
-    #    return constructErrorResponse(
-    #        404, ErrorCode.UserNotExist,
-    #        'UserId not exist' if GlobalConfig.ServerDebug else '')
-    result = []
-    buyTime = now()
-    for record in param:
-        # Skip invalid record
-        if ('count' not in record) or ('eaType' not in record):
-            continue
+            'Missing parameter' if GlobalConfig.ServerDebug else ''
+        )
+    userId = JwtManager.getCurrentUserId()
+    # Get user, prevent user data is not in our database
+    logger = current_app.logger
+    logger.info('[buyLicense] User %s request buy license.' % userId)
+    buyTime = timefunction.now()
+    responseData = []
+    for order in req:
+        # Skip invalid record,
+        count, broker = order.get('count', 0), order.get('broker', '').strip()
+        eaId, duration = order.get('eaId', '').strip(), order.get('duration', 30)
+        # keep count, duration type is int
         try:
-            count = int(record['count'])
+            count = int(count)
+            duration = int(duration)
         except ValueError:
-            # type of count cannot be convert to int
+            logger.warning(
+                '[buyLicense]    request %s fail, cannot convert count/duration to int.',
+                json.dumps(order)
+            )
             continue
-        eaType = record['eaType']
-        # TODO: check eaType
-        duration = record['duration'] if 'duration' in record \
-            else GlobalConfig.AppDefaultLicenseDurationDay
-        if (count <= 0) or (duration <= 0):
+        if (count <= 0) or (broker == '') or (eaId == '') or (duration <= 0):
+            logger.warning(
+                '[buyLicense]    request %s fail, invalid value.',
+                json.dumps(order)
+            )
             continue
-        licenses = [
+        newLicenses = [
             License(
-                lid=License.generateId(),
-                eaType=eaType,
-                durationDay=duration,
-                owner=userId,
-                buyTime=buyTime)
+                lid=License.generateId(), broker=broker, eaId=eaId, duration=duration,
+                owner=userId, buyTime=buyTime
+            )
             for i in range(count)]
-        # Insert into user's availableLicense (licenses)
-        updateCount = userQuery.update_one(
-            push_all__availableLicenses=licenses,
-            push__log=Log(
-                timestamp=buyTime,
-                operation=LogOperation.LicenseBuy,
-                ip='',
-                message=json.dumps([{
-                    'id': l.lid, 'eaType': l.eaType, 'duration': l.durationDay
-                } for l in licenses])))
-        print(updateCount)
-        for lic in licenses:
-            result.append({'id': lic.lid, 'eaType': eaType, 'duration': duration})
-    sendMail(userId, 'testing titile', 'this is body: ' + userId)
-    return make_response(jsonify({'count': len(result), 'result': result}), 200)
+        updateCount = User.objects(uid=userId).update_one(
+            upsert=True,
+            push_all__license=newLicenses,
+        )
+        if updateCount <= 0:
+            logger.warning(
+                '[buyLicense]    request %s fail, cannot update to DB.',
+                json.dumps(order)
+            )
+            continue
+        Log(user=userId, operation=LogOperation.LicenseBuy, ip=request.remote_addr,
+            timestamp=buyTime, message=json.dumps({
+                'broker': broker, 'eaId': eaId, 'count': count, 'duration': duration,
+                'id': [id.lid for id in newLicenses]
+            }))
 
-@V1Api.route('license/<userId>', methods=['GET'])
-@jwt_required()
-def getUserLicense(userId: str):
-    """Get user's all available (not activated) licenses.
-     :param userId: user's id.
-    URL parameter:
-      - userId: target user's id to update, must be email format.
-    GET parameter:
-      - size: max size of items to return. Default is 32.
-      - startTime: starting time in unix epoch (ms), included.
-      - endTime: end time in unix epoch (ms), excluded. Default is now.
-    Response Status Code:
-      - 200: success.
-      - 400: invalid parameter format, missing header, or missing parameter.
-      - 401: JWT auth fail.
-      - 403: JWT identify user does not have priviledge.
-      - 404: userId does not exist.
-    Response Data:
-      - remain: remaining logs count.
-      - result: array of log.
-          * result.timestamp: unix epoch timestamp (ms).
-          * operation: operation type of this log.
-          * ip: IP.
-          * user: extra joined user.
-          * message: extra message.
-    """
-    success, errorResponse = _generalVerify(userId)
-    if not success:
-        return errorResponse
-    # Parameters
-    size = request.values.get('size', 32, type=int)
-    startTime = request.values.get('startTime', None, type=float)
-    endTime = request.values.get('endTime', None, type=float)
-    if startTime is None:
-        return constructErrorResponse(
-            400, ErrorCode.InvalidParameter,
-            'Missing startTime' if GlobalConfig.ServerDebug else '')
-    startTime = epochMSToDateTime(startTime)
-    endTime = now() \
-        if (endTime is None) or (endTime == 0) \
-        else epochMSToDateTime(endTime)
-    # Check user exist
-    # TODO
-    print(startTime.timestamp(), endTime.timestamp())
-    # endTime < startTime: return nothing
-    if endTime < startTime:
-        return make_response(jsonify({'remain': 0, 'result': []}), 200)
-    # Do query
-    result = User.objects.aggregate([
-        {'$match': { '_id': userId }},
-        {'$unwind': '$licenses'},
-        {'$match': { 'licenses.buyTime': {'$gte': startTime, '$lt': endTime}}},
-        {'$project': {'_id': 0, 'licenses': 1}},
-        {'$sort': {'licenses.buyTime': -1}},
-        {'$limit': size},
-    ])
-    result = [l['licenses'] for l in result]
-    return make_response(jsonify({'remain': len(result), 'result': result}), 200)
+        logger.info('[buyLicense]    request %s success.' % json.dumps(order))
+        responseData.append({
+            'broker': broker, 'eaId': eaId, 'duration': duration,
+            'id': [id.lid for id in newLicenses]
+        })
+    return make_response(jsonify(responseData), 200)
 
-@V1Api.route('query-license', methods=['POST'])
+@V1Api.route('activate', methods=['POST'])
 @jwt_required()
-def queryLicenseStatus():
-    """Query given list of licenses status.
-     :note: this method can be called by admin only.
-    POST parameter:
-      - param: array of license ids to query. Only first 32 items will be processed. The value '32'
-            is defined in GlobalConfig.AppMaxQueryLicenseSize.
-    Response Status Code:
-      - 200: success.
-      - 400: if missing header or missing parameter.
-      - 401: JWT auth fail.
-      - 403: User has no privilege to perform this operation.
-    Response Data:
-      - result: array of only founded licenses.
-          * result.id: license id.
-          * result.duration: duration in day.
-          * result.eaType: EA type of this license.
-          * result.owner: owner id.
-          * result.buyTime: buy time in unix epoch (ms).
-          * result.activationTime: license activation time in unix epoch time (ms).
-                0 means not activated.
-          * result.activationIp: activation user's IP.
-          * result.consumer: activation user's id.
-    """
-    success, errorResponse = _generalVerify(
-        GlobalConfig.DbDefaultAdmin, verifyUserIdFormat=False, adminOnly=True)
-    if not success:
-        return errorResponse
-    requestIds = request.json.get('param', None)
-    if requestIds is None:
-        return constructErrorResponse(
-            400, ErrorCode.InvalidParameter,
-            'Missing license id list' if GlobalConfig.ServerDebug else '')
-    # Aggregate license ids
-    requestIds = requestIds[:GlobalConfig.AppMaxQueryLicenseSize]
-    # Do query
-    result = User.objects.aggregate([
-        {'$project': {'_id': 0, 'licenses': 1}},
-        {'$unwind': '$licenses'},
-        {'$match': { 'licenses.lid': {'$in': requestIds}}},
-    ])
-    result = [l['licenses'] for l in result]
-    return make_response(jsonify({'result': result}), 200) if success else errorResponse
-
-@V1Api.route('activate/<userId>', methods=['POST'])
-@jwt_required()
-def activateLicense(userId: str):
+def activateLicense() -> Response:
     """Activate a list of licenses.
-     :note: this method can be called by admin only.
     POST parameter:
-      - param: array of license ids to use. Only first 32 items will be processed. The value '32'
-            is defined in GlobalConfig.AppMaxQueryLicenseSize.
+      + array of the following:
+        - id: license id to use.
+        - mtId: the related mtid to identify which product to activate.
     Response Status Code:
-      - 200: success.
+      - 200: success (Need to check response data)
       - 400: if missing header or missing parameter.
       - 401: JWT auth fail.
-      - 403: User has no privilege to perform this operation.
-      - 404: userId does not exist.
-      - 409: some licenses are used.
+      - 403: Client has no privilege to perform this operation.
     Response Data:
-      - result: array of updated EA status.
-          * result.id: license id.
-          * result.duration: duration in day.
-          * result.eaType: EA type of this license.
-          * result.owner: owner id.
-          * result.buyTime: buy time in unix epoch (ms).
-          * result.activationTime: license activation time in unix epoch time (ms).
-                0 means not activated.
-          * result.activationIp: activation user's IP.
-          * result.consumer: activation user's id.
+      + status: array of affected product status.
+        - broker: broker name.
+        - eaId: EA id.
+        - mtId: product id of.
+        - expireTime: new expire time in UTC.
+      + fail: array of failed licenses.
+        - id: failed license's id.
+        - code: fail error code.
+        - message: extra message.
     """
-    success, errorResponse = _generalVerify(userId, verifyUserIdFormat=False)
-    if not success:
-        return errorResponse
-    requestIds = request.json.get('param', None)
-    if requestIds is None:
+    success, msg = generalVerify(request.headers)
+    if not success: return msg
+    # Validate parameters
+    req = request.json # type: List[Dict[str, str]]
+    if req is None:
         return constructErrorResponse(
-            400, ErrorCode.InvalidParameter,
-            'Missing license id list' if GlobalConfig.ServerDebug else '')
+            400, ErrorCode.MissingParameter,
+            'Missing parameter' if GlobalConfig.ServerDebug else ''
+        )
+    # Get current user's product status
+    userId = JwtManager.getCurrentUserId()
+    logger = current_app.logger
+    logger.info('[activate] User %s request activate.' % userId)
+    try:
+        user = User.objects(uid=userId).only('productStatus').get() # type: User
+    except me.errors.DoesNotExist:
+        logger.warning(
+            '[activate]    User %s does not exist in DB, so no matching product status', userId
+        )
+        return  constructErrorResponse(
+            409, ErrorCode.LicenseNotMatchToUserState,
+            'User %s does not exist in DB, so no matching product status' % userId
+                if GlobalConfig.ServerDebug else ''
+        )
+    # Build a lookup table
+    activateTime = timefunction.now()
+    newStatus = {}
+    failLicense = []
     # Do operation
-    eaStatus = {}
-    licenseResult = []
-    currentTime = now()
-    for lid in requestIds[:GlobalConfig.AppMaxQueryLicenseSize]:
-        user = User.getById(userId).get()
-        if len(user.eaStatus) > 0:
-            print('Origin: ', user.eaStatus[0].expireTime)
-        else:
-            print('Origin: NO data')
-        # Update license data
-        lidResult = User.objects._collection \
-            .find_one_and_update(
-                {
-                    '_id': userId,
-                    'licenses': {'$elemMatch': {'lid': lid}}
-                },
-                {
-                    '$set': {
-                        'licenses.$.activationTime': currentTime,
-                        'licenses.$.activationIp': request.remote_addr,
-                        'licenses.$.consumer': userId,
-                    },
-                },
-                projection={'licenses': {'$elemMatch': {'lid': lid}}, 'eaStatus': 1},
-                return_document=ReturnDocument.AFTER)
-        print('lidResult', lidResult)
-        if (lidResult is None) or ('licenses' not in lidResult):
-            licenseResult.append({'id': lid, 'result': ErrorCode.LicenseNotExist})
+    for order in req:
+        if type(order) is not dict:
             continue
-        eaType = lidResult['licenses'][0]['eaType']
-        duration = lidResult['licenses'][0]['duration']
-        # Update EA status
-        for status in lidResult['eaStatus']:
-            if status['eaType'] != eaType:
-                continue
-            # Found EA status record, update it
-            dueTime = status['expireTime'] + timedelta(days=duration)
-            statusResult = User.objects._collection \
-                .find_one_and_update(
-                    {
-                        '_id': userId,
-                        'eaStatus': {'$elemMatch': {'eaType': eaType}}
-                    },
-                    {
-                        '$set': {
-                            'eaStatus.$.expireTime': dueTime
-                        },
-                    },
-                    projection={'eaStatus': {'$elemMatch': {'eaType': eaType}}},
-                    return_document=ReturnDocument.AFTER)
-            print(' =====> Update EA status', statusResult)
-            break
-        else:
-            # EA status does not exist, add it
-            statusResult = User.objects._collection \
-                .find_one_and_update(
-                    {
-                        '_id': userId,
-                        'eaStatus': {'$not': {'$elemMatch': {'eaType': eaType}}}
-                    },
-                    {
-                        '$addToSet': {
-                            'eaStatus': {
-                                'eaType': eaType,
-                                'expireTime': currentTime + timedelta(days=duration)
-                            }
-                        },
-                    },
-                    projection={'eaStatus': {'$elemMatch': {'eaType': eaType}}},
-                    return_document=ReturnDocument.AFTER)
-            print(' =====> Create EA status', statusResult)
-
-        ## Add EA status if not exist
-        ## Update EA status
-        #statusResult = User.objects.aggregate([
-        #    {'$match': { '_id': userId }},
-        #    {'$unwind': '$eaStatus'},
-        #    {'$match': {'eaStatus.eaType': eaType}},
-        #    #{'$set': {'eaStatus.expireTime': {'$add': ['$eaStatus.expireTime', duration]}}},
-        #    {'$set': {'eaStatus.expireTime': {'$add': ['$eaStatus.expireTime', 99999999999]}}},
-        #    {'$project': {'_id': 0, 'eaStatus': 1}},
-        #])
-        #
-        currentStatus = None
-        for s in statusResult['eaStatus']:
-            if s['eaType'] != eaType:
-                continue
-            currentStatus = s
-            break
-        else:
-            # No EA type responsed, should be fail
-            print('License %s activation fail on user %s' % (lid, userId))
-            licenseResult.append({'id': lid, 'result': ErrorCode.LicenseConsumedButActivateFail})
+        lid, mId = order.get('id', None), order.get('mId', None)
+        if (lid is None) or (mId is None):
+            continue
+        # Get current license and productStatus
+        result = User.objects.aggregate([
+            {'$match': {'$and': [
+                {'license': { '$elemMatch': { '_id': lid, 'consumer': ''}}}
+            ]}},
+            {'$redact': {
+                '$cond': {
+                    'if': { '$or': [
+                        {'$eq': [ '$_id', lid ]},
+                        {'$gt': [ {'$size': {'$ifNull': ['$license', []]}}, 0] }
+                    ]},
+                    'then': '$$DESCEND', 'else': '$$PRUNE'
+                }
+            }},
+            {'$unwind': '$license'},
+            {'$replaceRoot': {'newRoot': '$license'}}
+        ])
+        license = None
+        for u in result:
+            license = License.fromDict(u)
+        if license is None:
+            failLicense.append({
+                'id': lid, 'code': ErrorCode.LicenseActivatedOrNotExist,
+                'message': '%s is activated or not found' % lid
+            })
+            logger.warning('[activate]    %s is activated or not found' % lid)
             continue
 
-        # TODO validate expire time is correct
+        try:
+            productStatus = user.productStatus \
+                .filter(broker=license.broker, eaId=license.eaId, mId=mId) \
+                .get()
+        except me.errors.DoesNotExist:
+            failLicense.append({
+                'id': lid, 'code': ErrorCode.LicenseNotMatchToUserState,
+                'message': '%s user %s has no product broker=%s, eaId=%s, mId=%s' %
+                    (lid, userId, license.broker, license.eaId, mId)
+                })
+            logger.warning(
+                '[activate]    %s user %s has no product broker=%s, eaId=%s, mId=%s',
+                lid, userId, license.broker, license.eaId, mId
+            )
+            continue
+        # Update license
+        # We need operate this way to prevent concurrent activation on the same license
+        r = User.objects(license__match={'lid': lid, 'consumer': ''}).update_one(
+            upsert=False,
+            set__license__S__consumer=userId,
+            set__license__S__activationTime=activateTime,
+            set__license__S__activationIp=request.remote_addr
+        )
+        if r < 1:
+            logger.warning('[activate]    %s activated or not found.' % lid)
+            failLicense.append({
+                'id': lid, 'code': ErrorCode.LicenseActivatedOrNotExist,
+                'message': '%s activated or not found' % lid
+            })
+            continue
+        # Update product state and write log
+        newExpireTime = timefunction.addDay(productStatus.expireTime, license.duration)
+        r = User.objects(
+                uid=userId,
+                productStatus__match={'broker': license.broker, 'eaId': license.eaId, 'mId': mId}
+            ).update_one(
+                upsert=False,
+                set__productStatus__S__expireTime=newExpireTime,
+            )
+        if r < 1:
+            logger.fatal(
+                '[activate]    %s user %s with product status not found, broker=%s, eaId=%s, mId=%s',
+                lid, userId, license.broker, license.eaId, mId
+            )
+            failLicense.append({
+                'id': lid, 'code': ErrorCode.LicenseConsumedButActivateToDBFail,
+                'message': 'License %s user %s with product status not found, broker=%s, eaId=%s, mId=%s' %
+                    (lid, userId, license.broker, license.eaId, mId)
+            })
+            continue
+        # Write log
+        Log(
+            user=userId, operation=LogOperation.LicenseActivate, ip=request.remote_addr,
+            timestamp=activateTime, message=json.dumps({
+                'id': license.lid,
+                'broker': license.broker, 'eaId': license.eaId, 'duration': license.duration,
+                'newExpireTime': timefunction.dateTimeToEpochMS(newExpireTime)
+            })).save()
 
-        licenseResult.append({'id': lid, 'result': ErrorCode.NoError})
-        eaStatus[eaType] = currentStatus['expireTime']
+        newStatus[(license.broker, license.eaId, mId)] = newExpireTime
+        logger.info('[activate]    %s activated success' % lid)
 
-    return make_response(jsonify({
-        'eaStatus': [{'eaType': key, 'expireTime': value} for key, value in eaStatus.items()],
-        'license': licenseResult
-    }), 200) if success else errorResponse
+    return make_response(
+        jsonify({
+            'status': [{
+                'broker': s[0], 'eaId': s[1], 'mId': s[2], 'expireTime': expireTime
+            } for s, expireTime in newStatus.items()],
+            'fail': failLicense
+        }), 200
+    )

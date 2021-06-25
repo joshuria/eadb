@@ -6,7 +6,7 @@ import re
 import mongoengine as me
 from ..config import GlobalConfig
 from ..timefunction import ZeroDateTime, now
-from . import AuthSet, EAStatus, License, Log, Status
+from . import AuthSet, ProductStatus, License, Status
 
 
 class User(me.DynamicDocument):
@@ -15,38 +15,38 @@ class User(me.DynamicDocument):
         'collection': 'user',
         'index_background': GlobalConfig.DbCreateIndexInBackground,
         'indexes': [
+            # Query if (lid, broker, eaId) can be activated
+            # and all license ids by user's (broker, eaId)
             {
-                'name': 'userLicenseId',
-                'fields': ['availableLicenses.lid'],
+                'name': 'userLicensesBrokerEaId',
+                'fields': ['license.broker', 'license.eaId'],
             },
+            # Query who activates license by given lid
+            # or query license info by Id
             {
-                'name': 'userLicenseOwnerBuyTimeIndex',
-                'fields': ['availableLicenses.owner',  '-availableLicenses.buyTime'],
+                'name': 'userLicensesId',
+                'fields': ['license.lid']
             },
+            # Query productStatus by given (broker, eaId, mId)
             {
-                'name': 'userLicenseConsumerActivationTimeIndex',
-                'fields': ['availableLicenses.consumer',  '-availableLicenses.activationTime'],
+                'name': 'userProductStatusBrokerEaIdMtId',
+                'fields': ['productStatus.broker',  'productStatus.eaId', 'productStatus.mId'],
             },
+            # License TTL
             {
-                'name': 'userLogTimestampOperationIndex',
-                'fields': ['log.timestamp', 'log.operation'],
+                'name': 'userLicenseTTL',
+                'fields': ['license.activationTime'],
+                'expireAfterSeconds': GlobalConfig.DbUserLicenseExpireDay * 24 * 60 * 60
             },
-            {
-                'name': 'userLogTimestampTTLIndex',
-                'fields': ['log.timestamp'],
-                'expireAfterSeconds': GlobalConfig.DbUserLogExpireDay * 24 * 60 * 60
-            }
         ]
     }
-    uid = me.StringField(db_field='_id', min_length=4, max_length=32, primary_key=True)
-    password = me.StringField(required=True)
+    uid = me.StringField(db_field='_id', min_length=4, max_length=64, primary_key=True)
     createTime = me.DateTimeField(default=now)
     status = me.IntField(default=Status.Enabled, choices=Status.getAllStatus())
     lastLoginTime = me.DateTimeField(default=ZeroDateTime)
     lastLoginIp = me.StringField(default='')
-    availableLicenses = me.EmbeddedDocumentListField(License, db_field='licenses', default=list)
-    eaStatus = me.EmbeddedDocumentListField(EAStatus, default=list)
-    log = me.EmbeddedDocumentListField(Log, default=list)
+    license = me.EmbeddedDocumentListField(License, default=list)
+    productStatus = me.EmbeddedDocumentListField(ProductStatus, default=list)
     auth = me.EmbeddedDocumentListField(AuthSet, default=list)
 
     @staticmethod
@@ -55,20 +55,3 @@ class User(me.DynamicDocument):
          :note: currently format is email.
         """
         return re.match(r'[^@]+@[^@]+\.[^@]+', userId) is not None
-
-    @staticmethod
-    def getById(
-        userId: str, keepLogCount: int=-32,
-        excludeList: Tuple[str] = ('uid', 'availableLicenses', 'auth', 'password')
-    ) -> me.QuerySet:
-        """Get User instance by uid (_id).
-         :return: QuerySet instance of user
-        """
-        query = User.objects(uid=userId)
-        if keepLogCount != 0:
-            query = query.fields(slice__log=keepLogCount)
-        else:
-            query = query.exclude('log')
-        if len(excludeList) > 0:
-            query = query.exclude(*excludeList)
-        return query

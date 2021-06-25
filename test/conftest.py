@@ -9,7 +9,7 @@ sys.path.insert(
 
 from app import create_app
 
-@pytest.fixture
+@pytest.fixture(scope='session', autouse=True)
 def client():
     app = create_app(True)
     client = app.test_client()

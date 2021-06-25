@@ -26,19 +26,31 @@ class GlobalConfig:
             Suggest don't use admin or root.
             Default is ''
             Access variable DbDefaultAdmin
+        * DATABASE_ADMIN_HASHED_PASSWORD: default admin's hashed password.
+            Default is ''.
+            Access variable DbDefaultAdminPassword
         * DATABASE_CREATE_INDEX_BACKGROUND: create index in background
             Default is true.
             Access variable DbCreateIndexInBackground
         * DATABASE_USER_LOG_EXPIRE_DAY: user operation log expire time in day.
             Default is 1 year (365 days).
             Access variable DbUserLogExpireDay
+        * DATABASE_USER_LICENSE_EXPIRE_DAY: activated license expire time in day.
+            Default is 1 year (365 days).
+            Access variable DbUserLicenseExpireDay
     + App settings:
         * USER_AGENT: acceptable user agent.
             Default is ""
             Access variable: AppUserAgent
-        * API_KEYS: acceptable API keys. Format is ([a-z]|[A-Z]|[0-9])+{32}, separated by ','.
+        * API_ADMIN_KEY: admin API key. Format is ([a-z]|[A-Z]|[0-9])+{32}.
             Default is ""
-            Access variable: AppApiKeys
+            Access variable: ApiAdminKey
+        * API_APP_KEY: App API key. Format is ([a-z]|[A-Z]|[0-9])+{32}.
+            Default is ""
+            Access variable: ApiAppKey
+        * API_MAINTENANCE_KEY: maintenance key. Format is ([a-z]|[A-Z]|[0-9])+{32}
+            Default is ""
+            Access variable: ApiMaintenanceKey
         * JWT_SECRET: JWT secret key.
             Default is ""
             Access variable: JwtSecret
@@ -76,14 +88,16 @@ class GlobalConfig:
     DbConnectionString = os.getenv(
         'DATABASE_CONNECTION_STRING', 'mongodb://localhost:27017/' + DbName)
     DbDefaultAdmin = os.getenv('DATABASE_ADMIN_NAME', '')
+    DbDefaultAdminPassword = os.getenv('DATABASE_ADMIN_HASHED_PASSWORD', '')
     DbUserLogExpireDay = int(os.getenv('DATABASE_USER_LOG_EXPIRE_DAY', '365'))
     DbCreateIndexInBackground = os.getenv('DATABASE_CREATE_INDEX_BACKGROUND', '1').lower() in\
         ('true', 't', '1', 'y', 'yes')
+    DbUserLicenseExpireDay = int(os.getenv('DATABASE_USER_LICENSE_EXPIRE_DAY', '365'))
     # App
     AppUserAgent = os.getenv('USER_AGENT', '')
-    AppApiKeys = {
-        x.strip() for x in os.getenv('API_KEYS', '').split(',')
-    }
+    ApiAdminKey = os.getenv('API_ADMIN_KEY', '')
+    ApiAppKey = os.getenv('API_APP_KEY', '')
+    ApiMaintenanceKey = os.getenv('API_MAINTENANCE_KEY', '')
     JwtSecret = os.getenv('JWT_SECRET', '')
     JwtExpireTime = timedelta(seconds=int(os.getenv('JWT_EXPIRE_SECONDS', '3600')))
     AppDefaultLicenseDurationDay = os.getenv('APP_DEFAULT_DURATION_DAY', 30)
