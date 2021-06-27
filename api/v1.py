@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 """Defines all information querying methods."""
-from datetime import timedelta
 from typing import Dict, List
 import json
 from flask import Blueprint, jsonify, make_response, Response, request, current_app
@@ -93,7 +92,6 @@ def auth(login: int=0) -> Response:
         data = {
             'createTime': user.createTime,
             'productStatus': user.productStatus,
-            'license': user.license,
         }
     else:
         data = {}
@@ -140,7 +138,7 @@ def getUserLog() ->  Response:
     current_app.logger.info('Start time: %s, End time: %s', startTime, endTime)
     # query
     result = Log.objects(user=userId, timestamp__gte=startTime, timestamp__lt=endTime) \
-        .exclude('id').limit(size).order_by('-timestamp')
+        .exclude('id', 'user').limit(size).order_by('-timestamp')
     data = [log.to_mongo() for log in result]
     return make_response(jsonify({
         # 'nextTime': (data[-1]['timestamp'] + timedelta(milliseconds=1)) if len(data) > 0 else 0,
@@ -209,20 +207,20 @@ def buyLicense() -> Response:
             continue
         newLicenses = [
             License(
-                lid=License.generateId(), broker=broker, eaId=eaId, duration=duration,
+                broker=broker, eaId=eaId, duration=duration,
                 owner=userId, buyTime=buyTime
-            )
-            for i in range(count)]
-        updateCount = User.objects(uid=userId).update_one(
-            upsert=True,
-            push_all__license=newLicenses,
-        )
-        if updateCount <= 0:
-            logger.warning(
-                '[buyLicense]    request %s fail, cannot update to DB.',
-                json.dumps(order)
-            )
-            continue
+            ) for i in range(count)]
+        License.objects.insert(newLicenses)
+        # updateCount = User.objects(uid=userId).update_one(
+        #     upsert=True,
+        #     push_all__license=newLicenses,
+        # )
+        # if updateCount <= 0:
+        #     logger.warning(
+        #         '[buyLicense]    request %s fail, cannot update to DB.',
+        #         json.dumps(order)
+        #     )
+        #     continue
         Log(user=userId, operation=LogOperation.LicenseBuy, ip=request.remote_addr,
             timestamp=buyTime, message=json.dumps({
                 'broker': broker, 'eaId': eaId, 'count': count, 'duration': duration,
@@ -296,32 +294,49 @@ def activateLicense() -> Response:
         if (lid is None) or (mId is None):
             continue
         # Get current license and productStatus
-        result = User.objects.aggregate([
-            {'$match': {'$and': [
-                {'license': { '$elemMatch': { '_id': lid, 'consumer': ''}}}
-            ]}},
-            {'$redact': {
-                '$cond': {
-                    'if': { '$or': [
-                        {'$eq': [ '$_id', lid ]},
-                        {'$gt': [ {'$size': {'$ifNull': ['$license', []]}}, 0] }
-                    ]},
-                    'then': '$$DESCEND', 'else': '$$PRUNE'
-                }
-            }},
-            {'$unwind': '$license'},
-            {'$replaceRoot': {'newRoot': '$license'}}
-        ])
-        license = None
-        for u in result:
-            license = License.fromDict(u)
-        if license is None:
+        try:
+            license = License.objects(lid=lid).get() # type: License
+        except me.errors.DoesNotExist:
             failLicense.append({
                 'id': lid, 'code': ErrorCode.LicenseActivatedOrNotExist,
                 'message': '%s is activated or not found' % lid
             })
             logger.warning('[activate]    %s is activated or not found' % lid)
             continue
+        if license.consumer != '':
+            failLicense.append({
+                'id': lid, 'code': ErrorCode.LicenseActivatedOrNotExist,
+                'message': '%s is activated or not found' % lid
+            })
+            logger.warning('[activate]    %s is activated or not found' % lid)
+            continue
+
+        # result = User.objects.aggregate([
+        #     {'$match': {'$and': [
+        #         {'license': { '$elemMatch': { '_id': lid, 'consumer': ''}}}
+        #     ]}},
+        #     {'$redact': {
+        #         '$cond': {
+        #             'if': { '$or': [
+        #                 {'$eq': [ '$_id', lid ]},
+        #                 {'$gt': [ {'$size': {'$ifNull': ['$license', []]}}, 0] }
+        #             ]},
+        #             'then': '$$DESCEND', 'else': '$$PRUNE'
+        #         }
+        #     }},
+        #     {'$unwind': '$license'},
+        #     {'$replaceRoot': {'newRoot': '$license'}}
+        # ])
+        # license = None
+        # for u in result:
+        #     license = License.fromDict(u)
+        # if license is None:
+        #     failLicense.append({
+        #         'id': lid, 'code': ErrorCode.LicenseActivatedOrNotExist,
+        #         'message': '%s is activated or not found' % lid
+        #     })
+        #     logger.warning('[activate]    %s is activated or not found' % lid)
+        #     continue
 
         try:
             productStatus = user.productStatus \
@@ -339,20 +354,25 @@ def activateLicense() -> Response:
             )
             continue
         # Update license
-        # We need operate this way to prevent concurrent activation on the same license
-        r = User.objects(license__match={'lid': lid, 'consumer': ''}).update_one(
-            upsert=False,
-            set__license__S__consumer=userId,
-            set__license__S__activationTime=activateTime,
-            set__license__S__activationIp=request.remote_addr
-        )
-        if r < 1:
-            logger.warning('[activate]    %s activated or not found.' % lid)
-            failLicense.append({
-                'id': lid, 'code': ErrorCode.LicenseActivatedOrNotExist,
-                'message': '%s activated or not found' % lid
-            })
-            continue
+        license.consumer = userId
+        license.activationTime = activateTime
+        license.activationIp = request.remote_addr
+        license.save()
+        # # We need operate this way to prevent concurrent activation on the same license
+        # r = User.objects(license__match={'lid': lid, 'consumer': ''}).update_one(
+        #     upsert=False,
+        #     set__license__S__consumer=userId,
+        #     set__license__S__activationTime=activateTime,
+        #     set__license__S__activationIp=request.remote_addr
+        # )
+        # if r < 1:
+        #     logger.warning('[activate]    %s activated or not found.' % lid)
+        #     failLicense.append({
+        #         'id': lid, 'code': ErrorCode.LicenseActivatedOrNotExist,
+        #         'message': '%s activated or not found' % lid
+        #     })
+        #     continue
+
         # Update product state and write log
         newExpireTime = timefunction.addDay(productStatus.expireTime, license.duration)
         r = User.objects(

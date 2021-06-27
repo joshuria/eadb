@@ -132,7 +132,7 @@ def addLogs(client: flask.testing.FlaskClient) -> None:
 
 @pytest.fixture(scope='function')
 def clearLogs(client: flask.testing.FlaskClient) -> None:
-    """Add n logs.
+    """Clear all logs.
      :param client: flask testing client instance.
     """
     yield client
@@ -183,9 +183,19 @@ def addLicenses(client: flask.testing.FlaskClient) -> None:
             payload.append(License(
                 broker=broker, eaId=eaId, owner=user, duration=duration
             ))
-        User.objects(uid=user).update_one(push_all__license=payload)
+        #User.objects(uid=user).update_one(push_all__license=payload)
+        License.objects.insert(payload)
         return payload
     yield client, _m
+
+@pytest.fixture(scope='function')
+def clearLicenses(client: flask.testing.FlaskClient) -> None:
+    """Clear all licenses.
+     :param client: flask testing client instance.
+    """
+    yield client
+    print('Fixture: Clear Licenses')
+    License.drop_collection()
 
 def verifyResponse(
     client: flask.testing.Client, response: flask.Response,

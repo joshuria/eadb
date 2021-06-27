@@ -36,11 +36,11 @@ def test_auth_admin(createUsers: Tuple[flask.testing.FlaskClient, Callable]) -> 
     verifyResponse(client, result, 200, 'auth', expectedData={
         'createTime': api.timefunction.dateTimeToEpochMS(users[0].createTime),
         'productStatus': users[0].productStatus,
-        'license': users[0].productStatus
     })
 
 def test_buy_license(
     createUsers: Tuple[flask.testing.FlaskClient, Callable],
+    clearLicenses: flask.testing.FlaskClient,
     clearLogs: flask.testing.FlaskClient
 ) -> None:
     """Test buy license"""
@@ -63,7 +63,8 @@ def test_buy_license(
 
     users[0].reload()
     # Validate license field
-    licenses = {l.lid: l for l in users[0].license} # type: Dict[str, License]
+    #licenses = {l.lid: l for l in users[0].license} # type: Dict[str, License]
+    licenses = {l.lid: l for l in License.objects(owner=users[0].uid)} # type: Dict[str, License]
     for ds in result.json:
         broker, eaId, duration, ids = ds['broker'], ds['eaId'], ds['duration'], ds['id']
         for id in ids:
@@ -100,6 +101,7 @@ def test_buy_license(
 def test_buy_license_new(
     createUsers: Tuple[flask.testing.FlaskClient, Callable],
     removeUsers:Tuple[flask.testing.FlaskClient, Callable],
+    clearLicenses: flask.testing.FlaskClient,
     clearLogs: flask.testing.FlaskClient
 ) -> None:
     """Test buy license"""
@@ -124,7 +126,8 @@ def test_buy_license_new(
 
     user = User.objects(uid=userId).get()
     # Validate license field
-    licenses = {l.lid: l for l in user.license} # type: Dict[str, License]
+    #licenses = {l.lid: l for l in user.license} # type: Dict[str, License]
+    licenses = {l.lid: l for l in License.objects(owner=userId)} # type: Dict[str, License]
     for ds in result.json:
         broker, eaId, duration, ids = ds['broker'], ds['eaId'], ds['duration'], ds['id']
         for id in ids:
@@ -161,6 +164,7 @@ def test_activate_license(
     createUsers: Tuple[flask.testing.FlaskClient, Callable],
     addProducts: Tuple[flask.testing.FlaskClient, Callable],
     addLicenses: Tuple[flask.testing.FlaskClient, Callable],
+    clearLicenses: flask.testing.FlaskClient,
     clearLogs: flask.testing.FlaskClient
 ) -> None:
     """Test activate license"""
@@ -195,11 +199,11 @@ def test_activate_license(
     end = time.time()
     print('Time: ', end - start)
 
-    buyer = User.objects(uid=users[1].uid).get()
+    buyer = License.objects(owner=users[1].uid)
     activator = User.objects(uid=users[0].uid).get()
     # Validate buyer
     for lic in targetLicenses:
-        realLic = buyer.license.filter(lid=lic.lid).get()
+        realLic = buyer.filter(lid=lic.lid).get()
         assert realLic.broker == lic.broker, \
             '%s broker not match %s != %s' % (lic.lid, realLic.broker, lic.broker)
         assert realLic.eaId == lic.eaId, \
