@@ -25,7 +25,7 @@ class User(me.DynamicDocument):
     uid = me.StringField(db_field='_id', min_length=4, max_length=64, primary_key=True)
     createTime = me.DateTimeField(default=now)
     status = me.IntField(default=Status.Enabled, choices=Status.getAllStatus())
-    lastLoginTime = me.DateTimeField(default=ZeroDateTime)
+    lastLoginTime = me.DateTimeField(default=now)
     lastLoginIp = me.StringField(default='')
     productStatus = me.EmbeddedDocumentListField(ProductStatus, default=list)
     auth = me.EmbeddedDocumentListField(AuthSet, default=list)

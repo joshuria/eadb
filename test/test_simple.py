@@ -241,7 +241,7 @@ def test_get_log(
     client, userCreator = createUsers
     _, logCreator = addLogs
     users = userCreator(['test1@testing.com', 'test2@testing.com']) # type: List[User]
-    nLogs = 10000
+    nLogs = 10
     logs = logCreator(users[0], nLogs, LogOperation.LicenseBuy)
 
     result = runAuth(client, payload={
@@ -252,7 +252,7 @@ def test_get_log(
     jwt = result.headers['JWT']
     startTime = 0
     endTime = api.timefunction.nowUnixEpochMS()
-    size = 100
+    size = 2
     logs = []
     iteration = 0
     while True:
@@ -279,3 +279,60 @@ def test_get_log(
         #     assert False, 'Too many iteration'
     assert len(logs) == nLogs, '# of retrived log not match: %d' % len(logs)
 
+def test_register_product(
+    createUsers: Tuple[flask.testing.FlaskClient, Callable],
+    addProducts: Tuple[flask.testing.FlaskClient, Callable],
+    clearLogs: flask.testing.FlaskClient
+) -> None:
+    """Test register product."""
+    client, userCreator = createUsers
+    _, productCreator = addProducts
+    users = userCreator(['test1@testing.com', 'test2@testing.com']) # type: List[User]
+    products = []
+    products.append(productCreator(users[0], 'bk0', 'idid0', 'mmm0', api.timefunction.now()))
+    products.append(productCreator(users[0], 'bk0', 'idid0', 'mmmnouse', api.timefunction.now()))
+    products.append(productCreator(users[0], 'bk0', 'ididnouse', 'mmm0', api.timefunction.now()))
+    products.append(productCreator(users[0], 'bk0nouse', 'idid0', 'mmm0', api.timefunction.now()))
+
+    result = runAuth(client, payload={
+        'userId': 'test1@testing.com',
+        'password': DefaultPassword
+    })
+    verifyResponse(client, result, 200, 'auth')
+    jwt = result.headers['JWT']
+
+    # start = time.time()
+    result = runRegisterProduct(
+        client, jwt=jwt,
+        payload=[{'broker': 'newbroker', 'eaId': 'newid', 'mId': 'newm'}])
+    print('response: ', result.json)
+    verifyResponse(client, result, 200, 'registerProduct')
+
+def test_register_product_new(
+    createUsers: Tuple[flask.testing.FlaskClient, Callable],
+    addProducts: Tuple[flask.testing.FlaskClient, Callable],
+    clearLogs: flask.testing.FlaskClient
+) -> None:
+    """Test register product."""
+    client, userCreator = createUsers
+    _, productCreator = addProducts
+    #users = userCreator(['test1@testing.com', 'test2@testing.com'], True) # type: List[User]
+    # products = []
+    # products.append(productCreator(users[0], 'bk0', 'idid0', 'mmm0', api.timefunction.now()))
+    # products.append(productCreator(users[0], 'bk0', 'idid0', 'mmmnouse', api.timefunction.now()))
+    # products.append(productCreator(users[0], 'bk0', 'ididnouse', 'mmm0', api.timefunction.now()))
+    # products.append(productCreator(users[0], 'bk0nouse', 'idid0', 'mmm0', api.timefunction.now()))
+
+    result = runAuth(client, payload={
+        'userId': 'test1@testing.com',
+        'password': DefaultPassword
+    })
+    verifyResponse(client, result, 200, 'auth')
+    jwt = result.headers['JWT']
+
+    # start = time.time()
+    result = runRegisterProduct(
+        client, jwt=jwt,
+        payload=[{'broker': 'newbroker', 'eaId': 'newid', 'mId': 'newm'}])
+    print('response: ', result.json)
+    verifyResponse(client, result, 200, 'registerProduct')

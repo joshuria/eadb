@@ -7,14 +7,13 @@ from flask_jwt_extended import jwt_required
 import mongoengine as me
 from .common import generalVerify, constructErrorResponse
 from .config import GlobalConfig
-from .model import ErrorCode, License, Log, LogOperation, Status, User
+from .model import ErrorCode, License, Log, LogOperation, Status, User, ProductStatus
 from .manager import JwtManager
 from . import timefunction
 
 V1Api = Blueprint('V1Api', __name__)
 
 
-#@V1Api.route('/auth', defaults={'login': 0}, methods=['POST'])
 @V1Api.route('/auth', methods=['POST'])
 @V1Api.route('/auth/<int:login>', methods=['POST'])
 def auth(login: int=0) -> Response:
@@ -99,7 +98,7 @@ def auth(login: int=0) -> Response:
     response.headers['JWT'] = jwtToken
     return response
 
-@V1Api.route('log', methods=['GET'])
+@V1Api.route('/log', methods=['GET'])
 @jwt_required()
 def getUserLog() ->  Response:
     """Get user's operation log.
@@ -146,7 +145,82 @@ def getUserLog() ->  Response:
         'log': data
     }), 200)
 
-@V1Api.route('license', methods=['POST'])
+@V1Api.route('/register-product', methods=['POST'])
+@jwt_required()
+def registerProduct() -> Response:
+    """Register a list of product to user (call by admin only).
+    Default expire time will be 0 (unix epoch in ms).
+    POST parameters:
+      + array of the product:
+          - broker: broker name.
+          - eaId: eaId.
+          - mId: mId.
+          - expireTime: initial expire time in unix epoch (ms). Default is 0.
+    Response Status Code:
+      - 200: success.
+      - 400: invalid parameter format, missing header, or missing parameter.
+      - 401: JWT auth fail.
+      - 403: Client has no privildge to do this operation.
+    Response Data:
+      + array of the following:
+          - broker: broker name.
+          - eaId: eaId.
+          - mId: mId.
+          - code: fail reason code.
+          - message: extra message. May be empty in production.
+    """
+    success, msg = generalVerify(request.headers, adminOnly=True)
+    if not success: return msg
+    # Validate parameters
+    req = request.json # type: List[Dict[str, int|str]]
+    if req is None:
+        return constructErrorResponse(
+            400, ErrorCode.MissingParameter,
+            'Missing parameter' if GlobalConfig.ServerDebug else ''
+        )
+    userId = JwtManager.getCurrentUserId()
+    logger = current_app.logger
+    logger.info('[registerProduct] User %s request register product.' % userId)
+
+    failList = []
+    successCount = 0
+    for order in req:
+        # Skip invalid order
+        broker, eaId, mId = order.get('broker', None), order.get('eaId', None), order.get('mId', None)
+        if (broker is None) or (eaId is None) or (mId is None):
+            logger.warning(
+                '[registerProduct]    request %s fail, cannot find necessary fields.' %
+                json.dumps(order))
+            continue
+        expireTime = timefunction.epochMSToDateTime(order.get('expireTime', 0))
+        # Do insert
+        result = User.objects(
+            uid=userId,
+            productStatus__not__match={'broker': broker, 'eaId': eaId, 'mId': mId}
+        ).update_one(
+            upsert=True,
+            push__productStatus=ProductStatus(broker=broker, eaId=eaId, mId=mId, expireTime=expireTime))
+        if result < 1:
+            failList.append({
+                'broker': broker, 'eaId': eaId, 'mId': mId, 'code': ErrorCode.RegisterProductAlreadyExist,
+                'message': 'broker=%s, eaId=%s, mId=%s, expireTime=%s already exist' %
+                    (broker, eaId, mId, str(expireTime))
+            })
+            logger.error(
+                '[registerProduct]    request broker=%s, eaId=%s, mId=%s, expireTime=%s already exist',
+                broker, eaId, mId, str(expireTime))
+            continue
+        # Write log
+        Log(
+            user=userId, operation=LogOperation.RegisterProduct, ip=request.remote_addr,
+            message=json.dumps({
+                'broker': broker, 'eaId': eaId, 'mId': mId,
+                'expireTime': timefunction.dateTimeToEpochMS(expireTime)
+            })).save()
+        successCount += 1
+    return make_response(jsonify({'success': successCount, 'fail': failList}), 200)
+
+@V1Api.route('/license', methods=['POST'])
 @jwt_required()
 def buyLicense() -> Response:
     """Buy license for specified user (call by admin only).
@@ -211,16 +285,6 @@ def buyLicense() -> Response:
                 owner=userId, buyTime=buyTime
             ) for i in range(count)]
         License.objects.insert(newLicenses)
-        # updateCount = User.objects(uid=userId).update_one(
-        #     upsert=True,
-        #     push_all__license=newLicenses,
-        # )
-        # if updateCount <= 0:
-        #     logger.warning(
-        #         '[buyLicense]    request %s fail, cannot update to DB.',
-        #         json.dumps(order)
-        #     )
-        #     continue
         Log(user=userId, operation=LogOperation.LicenseBuy, ip=request.remote_addr,
             timestamp=buyTime, message=json.dumps({
                 'broker': broker, 'eaId': eaId, 'count': count, 'duration': duration,
@@ -234,7 +298,7 @@ def buyLicense() -> Response:
         })
     return make_response(jsonify(responseData), 200)
 
-@V1Api.route('activate', methods=['POST'])
+@V1Api.route('/activate', methods=['POST'])
 @jwt_required()
 def activateLicense() -> Response:
     """Activate a list of licenses.
@@ -311,33 +375,6 @@ def activateLicense() -> Response:
             logger.warning('[activate]    %s is activated or not found' % lid)
             continue
 
-        # result = User.objects.aggregate([
-        #     {'$match': {'$and': [
-        #         {'license': { '$elemMatch': { '_id': lid, 'consumer': ''}}}
-        #     ]}},
-        #     {'$redact': {
-        #         '$cond': {
-        #             'if': { '$or': [
-        #                 {'$eq': [ '$_id', lid ]},
-        #                 {'$gt': [ {'$size': {'$ifNull': ['$license', []]}}, 0] }
-        #             ]},
-        #             'then': '$$DESCEND', 'else': '$$PRUNE'
-        #         }
-        #     }},
-        #     {'$unwind': '$license'},
-        #     {'$replaceRoot': {'newRoot': '$license'}}
-        # ])
-        # license = None
-        # for u in result:
-        #     license = License.fromDict(u)
-        # if license is None:
-        #     failLicense.append({
-        #         'id': lid, 'code': ErrorCode.LicenseActivatedOrNotExist,
-        #         'message': '%s is activated or not found' % lid
-        #     })
-        #     logger.warning('[activate]    %s is activated or not found' % lid)
-        #     continue
-
         try:
             productStatus = user.productStatus \
                 .filter(broker=license.broker, eaId=license.eaId, mId=mId) \
@@ -358,20 +395,6 @@ def activateLicense() -> Response:
         license.activationTime = activateTime
         license.activationIp = request.remote_addr
         license.save()
-        # # We need operate this way to prevent concurrent activation on the same license
-        # r = User.objects(license__match={'lid': lid, 'consumer': ''}).update_one(
-        #     upsert=False,
-        #     set__license__S__consumer=userId,
-        #     set__license__S__activationTime=activateTime,
-        #     set__license__S__activationIp=request.remote_addr
-        # )
-        # if r < 1:
-        #     logger.warning('[activate]    %s activated or not found.' % lid)
-        #     failLicense.append({
-        #         'id': lid, 'code': ErrorCode.LicenseActivatedOrNotExist,
-        #         'message': '%s activated or not found' % lid
-        #     })
-        #     continue
 
         # Update product state and write log
         newExpireTime = timefunction.addDay(productStatus.expireTime, license.duration)

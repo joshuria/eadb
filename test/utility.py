@@ -430,3 +430,22 @@ def runActivate(
     return client.post(
         urllib.parse.urljoin('/api/v1/activate', extraUrl),
         content_type='application/json', headers=headers, data=json.dumps(payload))
+
+def runRegisterProduct(
+    client: flask.testing.FlaskClient, jwt: str, extraUrl='',
+    payload=None, headers=GeneralHeader
+) -> flask.Response:
+    """Request POST /register-product
+     :param client: flask testing client instance.
+     :param jwt: auth JWT response.
+     :param extraUrl: extra url parameter to be appended.
+     :param payload: post payload.
+     :param headers: customized header to use.
+    """
+    if (jwt != '') and (jwt is not None):
+        if headers is GeneralHeader:
+            headers = GeneralHeader.copy()
+        headers['Authorization'] = 'Bearer %s' % jwt
+    return client.post(
+        urllib.parse.urljoin('/api/v1/register-product', extraUrl),
+        content_type='application/json', headers=headers, data=json.dumps(payload))
