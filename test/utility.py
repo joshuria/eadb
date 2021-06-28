@@ -57,7 +57,7 @@ def createUsers(client: flask.testing.FlaskClient):
         print('Fixture:: Create Users %s' % ('without removing' if noRemove else ''))
         skipRemove[0] = noRemove
         for u in info:
-            if type(u) is not Tuple:
+            if not isinstance(u, tuple):
                 u = u, Status.Enabled
             user = User(uid=u[0], status=u[1])
             try:
@@ -83,22 +83,9 @@ def removeUsers(client: flask.testing.FlaskClient):
     Do nothing if user already existed.
      :param client: flask testing client instance.
     """
-    users = []
-    def _m(info: List[str]) -> None:
-        """Register user ids to be removed when teardown.
-         :param info: user id list.
-         :return: list of created user instances.
-        """
-        users.extend(info)
-    # Call next
-    yield client, _m
-    # Finalize
-    print('Fixture:: Remove Users remove %d users' % len(users))
-    for u in users:
-        if type(u) is User:
-            u.delete()
-        else:
-            User.objects(uid=u).delete()
+    yield client
+    print('Fixture: Clear Logs')
+    User.drop_collection()
 
 @pytest.fixture(scope='function')
 def addLogs(client: flask.testing.FlaskClient) -> None:
@@ -154,7 +141,7 @@ def addProducts(client: flask.testing.FlaskClient) -> None:
         """
         print('Fixture: Call Add Products')
         status = ProductStatus(broker=broker, eaId=eaId, mId=mId, expireTime=expireTime)
-        if type(user) is User:
+        if isinstance(user, User):
             User.objects(uid=user.uid).update_one(push__productStatus=status)
         else:
             User.objects(uid=user).update_one(push__productStatus=status)
@@ -175,15 +162,10 @@ def addLicenses(client: flask.testing.FlaskClient) -> None:
         """
         print('Fixture: Call Add Licenses')
         payload = []
-        if type(user) is User:
+        if isinstance(user, User):
             user = user.uid
-        # now = datetime.now().timestamp()
-        # past = now - 60 * 60 * 24 * 30
         for i in range(n):
-            payload.append(License(
-                broker=broker, eaId=eaId, owner=user, duration=duration
-            ))
-        #User.objects(uid=user).update_one(push_all__license=payload)
+            payload.append(License(broker=broker, eaId=eaId, owner=user, duration=duration))
         License.objects.insert(payload)
         return payload
     yield client, _m
@@ -246,10 +228,10 @@ def runAuth(
         data=json.dumps(payload))
 
 def runGetUser(
-    client: flask.testing.FlaskClient, userId: str, jwt: str, extraUrl='',
-    headers=GeneralHeader
+    client: flask.testing.FlaskClient, jwt: str, extraUrl='',
+    payload=None, headers=GeneralHeader
 ) -> flask.Response:
-    """Request GET /user/<userId>
+    """Request GET /user
      :param client: flask testing client instance.
      :param userId: user's id.
      :param jwt: auth JWT response.
@@ -261,9 +243,8 @@ def runGetUser(
             headers = GeneralHeader.copy()
         headers['Authorization'] = 'Bearer %s' % jwt
     return client.get(
-        urllib.parse.urljoin(
-            urllib.parse.urljoin('/api/v1/user/', userId), extraUrl),
-        content_type='application/json', headers=headers)
+        urllib.parse.urljoin('/api/v1/user',  extraUrl),
+        headers=headers, query_string=payload)
 
 def runCreateUser(
     client: flask.testing.FlaskClient, userId: str, jwt: str, extraUrl='',
@@ -370,13 +351,12 @@ def runBuyLicense(
         urllib.parse.urljoin('/api/v1/license', extraUrl),
         content_type='application/json', headers=headers, data=json.dumps(payload))
 
-def runGetLicense(
-    client: flask.testing.FlaskClient, userId: str, jwt: str, extraUrl='',
+def runGetUserLicense(
+    client: flask.testing.FlaskClient, jwt: str, extraUrl='',
     payload=None, headers=GeneralHeader
 ) -> flask.Response:
-    """Request GET /license/<userId>
+    """Request GET /license
      :param client: flask testing client instance.
-     :param userId: new user's id.
      :param jwt: auth JWT response.
      :param extraUrl: extra url parameter to be appended.
      :param payload: post payload.
@@ -387,10 +367,8 @@ def runGetLicense(
             headers = GeneralHeader.copy()
         headers['Authorization'] = 'Bearer %s' % jwt
     return client.get(
-        urllib.parse.urljoin(
-            urllib.parse.urljoin('/api/v1/license/', userId), extraUrl),
-        content_type='application/json', headers=headers,
-        query_string=payload)
+        urllib.parse.urljoin('/api/v1/license', extraUrl),
+        content_type='application/json', headers=headers, query_string=payload)
 
 def runQueryLicense(
     client: flask.testing.FlaskClient, jwt: str, extraUrl='',

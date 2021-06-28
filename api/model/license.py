@@ -42,7 +42,8 @@ class License(me.Document):
             },
         ]
     }
-    lid = me.StringField(primary_key=True, default=_generateId)
+    # (implicit) id (_id) is required by paging
+    lid = me.StringField(default=_generateId)
     broker = me.StringField(required=True)
     eaId = me.StringField(required=True)
     duration = me.IntField(default=30)
@@ -60,6 +61,15 @@ class License(me.Document):
     @staticmethod
     def fromDict(dic: Dict[str, Any]) -> License:
         """Create License instance from dict which is returned from pymongo query."""
-        dic['lid'] = dic['_id']
-        del dic['_id']
         return License(**dic)
+
+    @staticmethod
+    def toDictWithoutActivation(lic: License) -> Dict:
+        """Convert to dict without activation info."""
+        o = lic.to_mongo()
+        del o['_id']
+        del o['consumer']
+        del o['activationTime']
+        del o['activationIp']
+        del o['owner']
+        return o

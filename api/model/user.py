@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 """User model."""
 from __future__ import annotations
-from typing import Tuple
 import re
 import mongoengine as me
 from ..config import GlobalConfig
-from ..timefunction import ZeroDateTime, now
+from ..timefunction import now
 from . import AuthSet, ProductStatus, Status
 
 

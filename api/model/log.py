@@ -37,3 +37,4 @@ class LogOperation():
     ModifyUser = 0x11
     LicenseBuy = 0x20
     LicenseActivate = 0x21
+    RegisterProduct = 0x30

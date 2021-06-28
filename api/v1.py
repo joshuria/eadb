@@ -58,7 +58,7 @@ def auth(login: int=0) -> Response:
 
     # Get user
     # The query & insert may fail when concurrently query the same user, must retry here
-    for retry in range(8):
+    for _ in range(8):
         query = User.objects(uid=userId)
         if login:
             query.only('status', 'createTime', 'productStatus', 'license')
@@ -68,10 +68,11 @@ def auth(login: int=0) -> Response:
             user = query.get()
         except me.errors.DoesNotExist:
             # This is new user
-            user = User(uid=userId)
+            user = User(
+                uid=userId, lastLoginTime=timefunction.now(), lastLoginIp=request.remote_addr)
             try:
                 user.save(force_insert=True)
-            except me.errors.NotUniqueError as e:
+            except me.errors.NotUniqueError:
                 # Already exist, retry
                 continue
         break
@@ -88,15 +89,68 @@ def auth(login: int=0) -> Response:
         )
     # Success
     if login:
-        data = {
-            'createTime': user.createTime,
-            'productStatus': user.productStatus,
-        }
+        # Update last login time/IP
+        User.objects(uid=userId).update_one(
+            lastLoginIp=request.remote_addr,
+            lastLoginTime=timefunction.now())
+        data = [ProductStatus.toDict(s) for s in user.productStatus]
     else:
-        data = {}
+        data = []
     response = make_response(jsonify(data), 200)
     response.headers['JWT'] = jwtToken
     return response
+
+@V1Api.route('/user', methods=['GET'])
+@jwt_required()
+def queryUser():
+    """Query given user's info.
+    Response Status Code:
+      - 200: success.
+      - 401: JWT auth fail.
+    Response Data:
+      * createTime: account create time in unix epoch (ms).
+      * lastLoginTime: last /auth was called time in unix epoch (ms).
+      * lastLoginIp: last /auth called IP.
+      * productStatus: array of all product status.
+          - broker: broker name.
+          - eaId: eaId.
+          - mId: mId.
+          - expireTime: product expire time in uniox epoch (ms).
+          - valid: product is valid (not expired) or not.
+    """
+    success, msg = generalVerify(request.headers)
+    if not success: return msg
+    userId = JwtManager.getCurrentUserId()
+    query = User.objects(uid=userId) \
+        .only('createTime', 'lastLoginTime', 'lastLoginIp', 'productStatus') \
+        .exclude('_id')
+    for _ in range(8):
+        try:
+            user = query.get()
+        except me.errors.DoesNotExist:
+            # This is new user
+            user = User(
+                uid=userId, lastLoginTime=timefunction.now(), lastLoginIp=request.remote_addr)
+            try:
+                user.save(force_insert=True)
+            except me.errors.NotUniqueError:
+                # Already exist, retry
+                continue
+        break
+    else:
+        # Retry n times but still fail:
+        return constructErrorResponse(
+            404, ErrorCode.InternalCannotInsertUser,
+            'Fail to query/insert user. Please retry.' if GlobalConfig.ServerDebug else ''
+        )
+    # Transform data
+    data = {
+        'createTime': user.createTime,
+        'lastLoginTime': user.lastLoginTime,
+        'lastLoginIp': user.lastLoginIp,
+        'productStatus': [ProductStatus.toDict(s) for s in user.productStatus]
+    }
+    return make_response(jsonify(data), 200)
 
 @V1Api.route('/log', methods=['GET'])
 @jwt_required()
@@ -112,7 +166,7 @@ def getUserLog() ->  Response:
       - 401: JWT auth fail.
       - 403: user is disabled.
     Response Data:
-      - nextEndTime: next query endTime, for paging use.
+      * nextTime: next query endTime in unix epoch (ms), for paging use.
       - log: array of logs.
           * timestamp: unix epoch timestamp (ms).
           * operation: operation type of this log.
@@ -134,13 +188,11 @@ def getUserLog() ->  Response:
     startTime = timefunction.epochMSToDateTime(startTime)
     endTime = timefunction.epochMSToDateTime(endTime) if endTime != 0 else timefunction.now()
     userId = JwtManager.getCurrentUserId()
-    current_app.logger.info('Start time: %s, End time: %s', startTime, endTime)
     # query
     result = Log.objects(user=userId, timestamp__gte=startTime, timestamp__lt=endTime) \
         .exclude('id', 'user').limit(size).order_by('-timestamp')
     data = [log.to_mongo() for log in result]
     return make_response(jsonify({
-        # 'nextTime': (data[-1]['timestamp'] + timedelta(milliseconds=1)) if len(data) > 0 else 0,
         'nextTime': data[-1]['timestamp'] if len(data) > 0 else 0,
         'log': data
     }), 200)
@@ -298,6 +350,56 @@ def buyLicense() -> Response:
         })
     return make_response(jsonify(responseData), 200)
 
+@V1Api.route('/license', methods=['GET'])
+@jwt_required()
+def getUserLicense():
+    """Get user's available (not activated) licenses in specified buy time range.
+    GET parameter:
+      - pageId: index for paging. Skip this filed when retrieving the first page.
+      - size: max size of items to return. Default is 32.
+    Response Status Code:
+      - 200: success.
+      - 400: invalid parameter format, missing header, or missing parameter.
+      - 401: JWT auth fail.
+    Response Data:
+      * nextPage: next query endTime in unix epoch (ms), for paging use.
+      * license: array of License.
+          - id: License id.
+          - broker: broker name.
+          - eaId: operation type of this log.
+          - duration: IP.
+          - buyTime: buy time in unix epoch (ms).
+    """
+    success, msg = generalVerify(request.headers)
+    if not success:
+        return msg
+    # Validate parameter
+    try:
+        size = request.values.get('size', 32, type=int)
+        pageId = request.values.get('pageId', '', type=str)
+    except ValueError:
+        return constructErrorResponse(
+            400, ErrorCode.InvalidParameter,
+            'Invalid parameter' if GlobalConfig.ServerDebug else ''
+        )
+    userId = JwtManager.getCurrentUserId()
+    # query
+    queryParam = {'owner': userId, 'consumer': ''}
+    if pageId != '':
+        queryParam['id__gt'] = pageId
+    result = License.objects(**queryParam) \
+        .exclude('consumer', 'activationTime', 'activationIp') \
+        .limit(size)
+    data = [lic for lic in result]
+    if len(data) > 0:
+        nextPageId = str(data[-1].id) if len(data) else ''
+        data = [License.toDictWithoutActivation(lic) for lic in data]
+        print(data)
+    else:
+        nextPageId = ''
+        data = []
+    return make_response(jsonify({'nextPage': nextPageId, 'license': data}), 200)
+
 @V1Api.route('/activate', methods=['POST'])
 @jwt_required()
 def activateLicense() -> Response:
@@ -436,3 +538,5 @@ def activateLicense() -> Response:
             'fail': failLicense
         }), 200
     )
+
+

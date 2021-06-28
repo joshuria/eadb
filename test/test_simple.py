@@ -5,7 +5,6 @@ import time
 from typing import List, Tuple, Callable
 import random
 import flask.testing
-from api.config import GlobalConfig
 from api.model import License, Log, LogOperation, User
 import api.timefunction
 from test.utility import *
@@ -33,10 +32,48 @@ def test_auth_admin(createUsers: Tuple[flask.testing.FlaskClient, Callable]) -> 
         'userId': 'test1@testing.com',
         'password': DefaultPassword
     })
+    verifyResponse(client, result, 200, 'auth')
+
+def test_get_user(
+    createUsers: Tuple[flask.testing.FlaskClient, Callable]
+) -> None:
+    """Test get user info."""
+    client, userCreator = createUsers
+    users = userCreator(['test1@testing.com', 'test2@testing.com']) # type: List[User]
+    result = runAuth(client, payload={
+        'userId': users[0].uid,
+        'password': DefaultPassword
+    })
+    verifyResponse(client, result, 200, 'auth')
+    jwt = result.headers['JWT']
+
+    result = runGetUser(client, jwt=jwt)
     verifyResponse(client, result, 200, 'auth', expectedData={
         'createTime': api.timefunction.dateTimeToEpochMS(users[0].createTime),
         'productStatus': users[0].productStatus,
+    }, expectDataContains={'lastLoginTime', 'lastLoginIp'})
+
+def test_get_user_new(
+    createUsers: Tuple[flask.testing.FlaskClient, Callable],
+    removeUsers: flask.testing.FlaskClient,
+) -> None:
+    """Test get user info."""
+    client, userCreator = createUsers
+    #users = userCreator(['test1@testing.com', 'test2@testing.com']) # type: List[User]
+    userId = 'test1@testing.com'
+    result = runAuth(client, payload={
+        'userId': userId,
+        'password': DefaultPassword
     })
+    verifyResponse(client, result, 200, 'auth')
+    jwt = result.headers['JWT']
+
+    result = runGetUser(client, jwt=jwt)
+    user = User.objects(uid=userId).get()
+    verifyResponse(client, result, 200, 'auth', expectedData={
+        'createTime': api.timefunction.dateTimeToEpochMS(user.createTime),
+        'productStatus': user.productStatus,
+    }, expectDataContains={'lastLoginTime', 'lastLoginIp'})
 
 def test_buy_license(
     createUsers: Tuple[flask.testing.FlaskClient, Callable],
@@ -78,8 +115,7 @@ def test_buy_license(
                 '%s duration not match %d != %d' % (id, realLicense.duration, duration)
     # Validate log field
     logs = Log.objects(user=users[0].uid)
-    for log in logs:
-        log  # type: Log
+    for log in logs: # type: List[Log]
         assert log.operation == LogOperation.LicenseBuy, \
             'Operation is not correct: %d' % log.operation
         entry = json.loads(log.message)
@@ -100,15 +136,13 @@ def test_buy_license(
 
 def test_buy_license_new(
     createUsers: Tuple[flask.testing.FlaskClient, Callable],
-    removeUsers:Tuple[flask.testing.FlaskClient, Callable],
+    removeUsers:flask.testing.FlaskClient,
     clearLicenses: flask.testing.FlaskClient,
     clearLogs: flask.testing.FlaskClient
 ) -> None:
     """Test buy license"""
     client, userCreator = createUsers
-    _, userRemover = removeUsers
     userId = 'test1@testing.com'
-    userRemover([userId]) # type: List[User]
 
     result = runAuth(client, payload={
         'userId': userId,
@@ -141,8 +175,7 @@ def test_buy_license_new(
                 '%s duration not match %d != %d' % (id, realLicense.duration, duration)
     # Validate log field
     logs = Log.objects(user=userId)
-    for log in logs:
-        log  # type: Log
+    for log in logs: # type: List[Log]
         assert log.operation == LogOperation.LicenseBuy, \
             'Operation is not correct: %d' % log.operation
         entry = json.loads(log.message)
@@ -159,6 +192,42 @@ def test_buy_license_new(
                 '%s duration not match %d != %d' % (id, realLicense.duration, duration)
             assert abs((buyTime - realLicense.buyTime).total_seconds()) < 600, \
                 '%s buy time not match %s != %s' % (id, str(realLicense.buyTime), str(buyTime))
+
+def test_get_user_license(
+    createUsers: Tuple[flask.testing.FlaskClient, Callable],
+    addLicenses: Tuple[flask.testing.FlaskClient, Callable],
+    clearLicenses: flask.testing.FlaskClient,
+) -> None:
+    """Test get user owned license"""
+    client, userCreator = createUsers
+    _, licenseCreator = addLicenses
+    users = userCreator(['test1@testing.com', 'test2@testing.com']) # type: List[User]
+    nLicenses = 10000
+    licenses = licenseCreator(users[0], nLicenses, 'bk0', 'idid0', 30) # type: List[License]
+
+    result = runAuth(client, payload={
+        'userId': users[0].uid,
+        'password': DefaultPassword
+    })
+    verifyResponse(client, result, 200, 'auth')
+
+    jwt = result.headers['JWT']
+    pageId = ''
+    size = 100
+    responseLicenses = []
+    iteration = 0
+    while True:
+        result = runGetUserLicense(client, jwt=jwt, payload={'size': size, 'pageId': pageId})
+        verifyResponse(client, result, 200, 'getUserLicense')
+        if (len(result.json['license']) == 0) or (result.json['nextPage'] == ''):
+            break
+        print('    Return: ', len(result.json['license']))
+        responseLicenses.extend(result.json['license'])
+        pageId = result.json['nextPage']
+        iteration += 1
+        # if iteration > 10:
+        #     assert False, 'Too many iteration'
+    assert len(responseLicenses) == nLicenses, '# of retrived license not match: %d' % len(responseLicenses)
 
 def test_activate_license(
     createUsers: Tuple[flask.testing.FlaskClient, Callable],
@@ -311,7 +380,8 @@ def test_register_product(
 def test_register_product_new(
     createUsers: Tuple[flask.testing.FlaskClient, Callable],
     addProducts: Tuple[flask.testing.FlaskClient, Callable],
-    clearLogs: flask.testing.FlaskClient
+    removeUsers: flask.testing.FlaskClient,
+    clearLogs: flask.testing.FlaskClient,
 ) -> None:
     """Test register product."""
     client, userCreator = createUsers
