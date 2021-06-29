@@ -313,6 +313,8 @@ def test_get_log(
     nLogs = 10
     logs = logCreator(users[0], nLogs, LogOperation.LicenseBuy)
 
+    print([(l.id, l.timestamp) for l in logs])
+
     result = runAuth(client, payload={
         'userId': users[0].uid,
         'password': DefaultPassword
@@ -321,6 +323,7 @@ def test_get_log(
     jwt = result.headers['JWT']
     startTime = 0
     endTime = api.timefunction.nowUnixEpochMS()
+    pageId = ''
     size = 2
     logs = []
     iteration = 0
@@ -328,9 +331,9 @@ def test_get_log(
         print('Use range %d, %d' % (startTime, endTime))
         result = runGetUserLog(
             client, jwt=jwt,
-            payload={'size': size, 'startTime': startTime, 'endTime': endTime})
+            payload={'size': size, 'startTime': startTime, 'endTime': endTime, 'pageId': pageId})
         verifyResponse(client, result, 200, 'log')
-        if (len(result.json['log']) == 0) or (result.json['nextTime'] == 0):
+        if (len(result.json['log']) == 0) or (result.json['nextPage'] == ''):
             break
         print('    Return: ', len(result.json['log']))
         data = result.json['log']
@@ -341,8 +344,7 @@ def test_get_log(
             for i in range(len(data))
         ), 'Return timestamp not in range'
         logs.extend(data)
-        #startTime = result.json['nextTime']
-        endTime = result.json['nextTime']
+        pageId = result.json['nextPage']
         iteration += 1
         # if iteration > 10:
         #     assert False, 'Too many iteration'

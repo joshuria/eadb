@@ -159,14 +159,14 @@ def getUserLog() ->  Response:
     GET parameter:
       - size: max size of items to return. Default is 32.
       - startTime: starting time in unix epoch (ms), included. Default is 0.
-      - endTime: end time in unix epoch (ms), excluded. Default is now.
+      - endTime: end time in unix epoch (ms), included. Default is now.
+      - pageId: inex for paging. Skip this field when retrieving the first page.
     Response Status Code:
       - 200: success.
       - 400: invalid parameter format, missing header, or missing parameter.
       - 401: JWT auth fail.
-      - 403: user is disabled.
     Response Data:
-      * nextTime: next query endTime in unix epoch (ms), for paging use.
+      * nextPage: next query endTime in unix epoch (ms), for paging use.
       - log: array of logs.
           * timestamp: unix epoch timestamp (ms).
           * operation: operation type of this log.
@@ -180,6 +180,7 @@ def getUserLog() ->  Response:
         size = request.values.get('size', 32, type=int)
         startTime = request.values.get('startTime', 0, type=int)
         endTime = request.values.get('endTime', 0, type=int)
+        pageId = request.values.get('pageId', '', type=str)
     except ValueError:
         return constructErrorResponse(
             400, ErrorCode.InvalidParameter,
@@ -189,13 +190,18 @@ def getUserLog() ->  Response:
     endTime = timefunction.epochMSToDateTime(endTime) if endTime != 0 else timefunction.now()
     userId = JwtManager.getCurrentUserId()
     # query
-    result = Log.objects(user=userId, timestamp__gte=startTime, timestamp__lt=endTime) \
-        .exclude('id', 'user').limit(size).order_by('-timestamp')
-    data = [log.to_mongo() for log in result]
-    return make_response(jsonify({
-        'nextTime': data[-1]['timestamp'] if len(data) > 0 else 0,
-        'log': data
-    }), 200)
+    queryParam = {'user': userId, 'timestamp__gte': startTime, 'timestamp__lt': endTime}
+    if pageId != '':
+        queryParam['id__gt'] = pageId
+    result = Log.objects(**queryParam).exclude('user').limit(size)
+    data = [log for log in result]
+    if len(data) > 0:
+        nextPageId = str(data[-1].id)
+        data = [Log.toDict(log) for log in result]
+    else:
+        nextPageId = ''
+        data = []
+    return make_response(jsonify({'nextPage': nextPageId, 'log': data}), 200)
 
 @V1Api.route('/register-product', methods=['POST'])
 @jwt_required()
@@ -355,7 +361,7 @@ def buyLicense() -> Response:
 def getUserLicense():
     """Get user's available (not activated) licenses in specified buy time range.
     GET parameter:
-      - pageId: index for paging. Skip this filed when retrieving the first page.
+      - pageId: index for paging. Skip this field when retrieving the first page.
       - size: max size of items to return. Default is 32.
     Response Status Code:
       - 200: success.
@@ -392,9 +398,8 @@ def getUserLicense():
         .limit(size)
     data = [lic for lic in result]
     if len(data) > 0:
-        nextPageId = str(data[-1].id) if len(data) else ''
+        nextPageId = str(data[-1].id)
         data = [License.toDictWithoutActivation(lic) for lic in data]
-        print(data)
     else:
         nextPageId = ''
         data = []

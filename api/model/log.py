@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 """Log model used in User model."""
+from __future__ import annotations
+from typing import Dict
 import mongoengine as me
 from ..timefunction import now
 from ..config import GlobalConfig
@@ -14,13 +16,13 @@ class Log(me.Document):
             # Query log in time range by given timestamp, its also a TTL index
             {
                 'name': 'logTTL',
-                'fields': ['-timestamp'],
+                'fields': ['timestamp'],
                 'expireAfterSeconds': GlobalConfig.DbUserLogExpireDay * 24 * 60 * 60
             },
             # Query user log
             {
                 'name': 'logUserTime',
-                'fields': ['user', '-timestamp']
+                'fields': ['user', 'timestamp']
             },
         ]
     }
@@ -29,6 +31,14 @@ class Log(me.Document):
     operation = me.IntField(required=True)
     ip = me.StringField(required=True)
     message = me.StringField(default='')
+
+    @staticmethod
+    def toDict(log: Log) -> Dict:
+        """Convert to dict without activation info."""
+        o = log.to_mongo()
+        del o['_id']
+        return o
+
 
 class LogOperation():
     """Defines tracked operations in log."""
