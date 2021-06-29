@@ -31,9 +31,11 @@ class ErrorCode:
     LicenseNotMatchToUserState = 0x401
     LicenseConsumedButActivateToDBFail = 0x402
     LicenseCannotUpdateDB = 0x403
+    LicenseNotFound = 0x400
 
     # Register product
     RegisterProductAlreadyExist = 0x500
 
     # Internal Error
     InternalCannotInsertUser = 0x1000
+    InternalDuplicatedLicense = 0x1001

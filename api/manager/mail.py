@@ -13,6 +13,7 @@ class MailManager:
         """Initialize manager with flask app intance."""
         MailManager.mail.init_app(app)
 
+    @staticmethod
     def sendMail(address: str, title: str, body: str) -> None:
         """Send mail to user. """
         msg = Message(title, sender=GlobalConfig.MailSenderAddress, recipients=[address])

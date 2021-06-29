@@ -8,7 +8,7 @@ import mongoengine as me
 from .common import generalVerify, constructErrorResponse
 from .config import GlobalConfig
 from .model import ErrorCode, License, Log, LogOperation, Status, User, ProductStatus
-from .manager import JwtManager
+from .manager import JwtManager, MailManager
 from . import timefunction
 
 V1Api = Blueprint('V1Api', __name__)
@@ -354,6 +354,7 @@ def buyLicense() -> Response:
             'broker': broker, 'eaId': eaId, 'duration': duration,
             'id': [id.lid for id in newLicenses]
         })
+    MailManager.sendMail(userId, 'License Notification', json.dumps([id.lid for id in newLicenses]))
     return make_response(jsonify(responseData), 200)
 
 @V1Api.route('/license', methods=['GET'])
@@ -404,6 +405,61 @@ def getUserLicense():
         nextPageId = ''
         data = []
     return make_response(jsonify({'nextPage': nextPageId, 'license': data}), 200)
+
+@V1Api.route('query-license', methods=['POST'])
+@jwt_required()
+def queryLicenseStatus():
+    """Query given list of licenses' status.
+    POST parameter:
+      - param: array of license ids to query. Only first 32 items will be processed. The value '32'
+            is defined in GlobalConfig.AppMaxQueryLicenseSize.
+    Response Status Code:
+      - 200: success.
+      - 400: if missing header or missing parameter.
+      - 401: JWT auth fail.
+      - 403: User has no privilege to perform this operation.
+    Response Data:
+      *  array of the following:
+          + id: license id.
+          + code: error code
+          + license:
+              - broker: broker name.
+              - eaId: eaId.
+              - duration: duration in day.
+              - owner: owner user Id.
+              - buyTime: buy time in unix epoch (ms).
+              - consumer: user Id who activated this license. '' if no activate.
+              - activationTime: activation time in unix epoch (ms).
+              - activationIp: activation Ip.
+    """
+    success, msg = generalVerify(request.headers)
+    if not success:
+        return msg
+    if request.json is None:
+        return constructErrorResponse(
+            400, ErrorCode.InvalidParameter,
+            'Invalid parameter' if GlobalConfig.ServerDebug else ''
+        )
+
+    logger = current_app.logger
+    result = []
+    for lid in request.json:
+        lid = str(lid)
+        try:
+            license = License.objects(lid=lid).get()
+        except me.errors.DoesNotExist:
+            result.append({'id': lid, 'code': ErrorCode.LicenseNotFound, 'license': {}})
+            continue
+        except me.errors.NotUniqueError:
+            logger.fatal('[queryLicenseStatus] Invalid state, found duplicated license ID %s', lid)
+            result.append({'id': lid, 'code': ErrorCode.InternalDuplicatedLicense, 'license': {}})
+            continue
+        licInstance = license.to_mongo()
+        del licInstance['lid']
+        del licInstance['_id']
+        result.append({
+            'id': lid, 'code': ErrorCode.NoError, 'license': licInstance})
+    return make_response(jsonify(result), 200)
 
 @V1Api.route('/activate', methods=['POST'])
 @jwt_required()

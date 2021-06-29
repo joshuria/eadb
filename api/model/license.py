@@ -37,8 +37,8 @@ class License(me.Document):
             },
             # Query who activates license
             {
-                'name': 'licensesConsumer',
-                'fields': ['consumer']
+                'name': 'licensesLid',
+                'fields': ['lid']
             },
         ]
     }

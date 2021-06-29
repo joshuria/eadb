@@ -5,7 +5,8 @@ import time
 from typing import List, Tuple, Callable
 import random
 import flask.testing
-from api.model import License, Log, LogOperation, User
+from mongoengine.queryset.transform import query
+from api.model import License, Log, LogOperation, User, ErrorCode
 import api.timefunction
 from test.utility import *
 
@@ -91,10 +92,13 @@ def test_buy_license(
     verifyResponse(client, result, 200, 'auth')
     jwt = result.headers['JWT']
 
+    start = time.time()
     result = runBuyLicense(client, jwt, payload=[
         {'broker': 'broker1', 'eaId': 'idid1', 'count': 10, 'duration': 10},
         {'broker': 'broker1', 'eaId': 'idid2', 'count': 10, 'duration': 20}
     ])
+    stop = time.time()
+    print('Total Time: %f' % (stop - start))
     print('response: ', result.json)
     verifyResponse(client, result, 200, 'buyLicense')
 
@@ -133,6 +137,7 @@ def test_buy_license(
             assert abs((buyTime - realLicense.buyTime).total_seconds()) < 600, \
                 '%s buy time not match %s != %s' % (id, str(realLicense.buyTime), str(buyTime))
         assert entry['count'] == len(entry['id'])
+    assert False
 
 def test_buy_license_new(
     createUsers: Tuple[flask.testing.FlaskClient, Callable],
@@ -151,10 +156,13 @@ def test_buy_license_new(
     verifyResponse(client, result, 200, 'auth')
     jwt = result.headers['JWT']
 
+    start = time.time()
     result = runBuyLicense(client, jwt, payload=[
         {'broker': 'broker1', 'eaId': 'idid1', 'count': 10, 'duration': 10},
         {'broker': 'broker1', 'eaId': 'idid2', 'count': 10, 'duration': 20}
     ])
+    stop = time.time()
+    print('Total Time: %f' % (stop - start))
     print('response: ', result.json)
     verifyResponse(client, result, 200, 'buyLicense')
 
@@ -192,6 +200,7 @@ def test_buy_license_new(
                 '%s duration not match %d != %d' % (id, realLicense.duration, duration)
             assert abs((buyTime - realLicense.buyTime).total_seconds()) < 600, \
                 '%s buy time not match %s != %s' % (id, str(realLicense.buyTime), str(buyTime))
+    assert False
 
 def test_get_user_license(
     createUsers: Tuple[flask.testing.FlaskClient, Callable],
@@ -228,6 +237,43 @@ def test_get_user_license(
         # if iteration > 10:
         #     assert False, 'Too many iteration'
     assert len(responseLicenses) == nLicenses, '# of retrived license not match: %d' % len(responseLicenses)
+
+def test_query_license(
+    createUsers: Tuple[flask.testing.FlaskClient, Callable],
+    addLicenses: Tuple[flask.testing.FlaskClient, Callable],
+    clearLicenses: flask.testing.FlaskClient,
+) -> None:
+    """Test get user owned license"""
+    client, userCreator = createUsers
+    _, licenseCreator = addLicenses
+    users = userCreator(['test1@testing.com', 'test2@testing.com']) # type: List[User]
+    nLicenses = 10000
+    licenses0 = licenseCreator(users[0], nLicenses, 'bk0', 'idid0', 30) # type: List[License]
+    licenses1 = licenseCreator(users[1], nLicenses, 'bk1', 'idid1', 10) # type: List[License]
+    queryCount = 32
+
+    result = runAuth(client, payload={
+        'userId': users[0].uid,
+        'password': DefaultPassword
+    })
+    verifyResponse(client, result, 200, 'auth')
+
+    jwt = result.headers['JWT']
+
+    targetLicenses = random.sample(range(0, len(licenses0)), queryCount // 2)
+    targetLicenses.extend(random.sample(range(0, len(licenses1)), queryCount - queryCount // 2))
+    for i in range(queryCount // 2):
+        targetLicenses[i] = licenses0[targetLicenses[i]]
+    for i in range(queryCount - queryCount // 2):
+        targetLicenses[i + queryCount // 2] = licenses1[targetLicenses[i + queryCount // 2]]
+
+    start = time.time()
+    result = runQueryLicense(client, jwt, payload=[l.lid for l in targetLicenses])
+    stop = time.time()
+    print('Time: %f' %(stop - start))
+    verifyResponse(client, result, 200, 'queryLicense')
+    assert len(result.json) == queryCount, '# of retrived license not match: %d' % len(result.json)
+    assert all([l['code'] == ErrorCode.NoError for l in result.json])
 
 def test_activate_license(
     createUsers: Tuple[flask.testing.FlaskClient, Callable],

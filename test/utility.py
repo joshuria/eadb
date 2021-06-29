@@ -376,7 +376,6 @@ def runQueryLicense(
 ) -> flask.Response:
     """Request POST /query-license
      :param client: flask testing client instance.
-     :param userId: new user's id.
      :param jwt: auth JWT response.
      :param extraUrl: extra url parameter to be appended.
      :param payload: post payload.
